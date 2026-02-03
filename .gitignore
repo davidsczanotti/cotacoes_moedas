@@ -1,0 +1,46 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.py[cod].*
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Test artifacts
+.pytest_cache/
+.pytest-tmp/
+.pytest_tmp/
+pytest-cache-files-*/
+
+# Local scratch folders (dev)
+permtest/
+permtest2/
+pytest123/
+.foo/
+.tmp_test/
+
+# Build / packaging outputs
+dist/
+build/
+*.build/
+*.dist/
+nuitka-crash-report.xml
+
+# Playwright downloaded browsers
+ms-playwright/
+
+# Editor/OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local debug artifacts
+.git_acl.txt
