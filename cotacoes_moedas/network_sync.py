@@ -33,6 +33,7 @@ def copiar_pasta_para_rede(
 
     last_error: Exception | None = None
     last_unc_error: OSError | None = None
+    attempt_errors: list[str] = []
     has_candidate = False
 
     for destino_base in destinos_base:
@@ -48,9 +49,30 @@ def copiar_pasta_para_rede(
         except Exception as exc:
             last_error = exc
             last_unc_error = unc_error
+            display_destino = (
+                destino_base
+                if destino_base == destino_base_unc
+                else f"{destino_base} -> {destino_base_unc}"
+            )
+            if unc_error:
+                attempt_errors.append(
+                    f"{destino_base}: UNC falhou ({unc_error.__class__.__name__} {unc_error})"
+                )
+            attempt_errors.append(
+                f"{display_destino}: falhou ({exc.__class__.__name__} {exc})"
+            )
             continue
         return destino_completo, unc_error, None
 
     if not has_candidate:
         return None, None, ValueError("Nenhum destino valido informado para copia em rede.")
+    if attempt_errors:
+        return (
+            None,
+            last_unc_error,
+            RuntimeError(
+                "Falha ao copiar para a rede. Tentativas: "
+                + " | ".join(attempt_errors)
+            ),
+        )
     return None, last_unc_error, last_error

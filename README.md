@@ -26,11 +26,12 @@ historico continuo em XLSX e CSV.
 
 ## Como funciona
 
-1. Busca os dados via Playwright (headless).
-2. Para cada fonte, grava os valores na linha da data local do dia.
-3. Se a data ja existe, preenche apenas colunas vazias (nao sobrescreve cotacoes ja preenchidas no dia); se nao, cria nova linha.
-4. Atualiza a coluna de log com status e timestamp.
-5. Atualiza o CSV com a linha do ultimo log, substituindo a data se ja existir.
+1. Valida a planilha para decidir quais fontes coletar (janela de horario + campos vazios no dia).
+2. Busca os dados via Playwright (headless) apenas para as fontes elegiveis (por padrao em paralelo).
+3. Para cada fonte, grava os valores na linha da data local do dia.
+4. Se a data ja existe, preenche apenas colunas vazias (nao sobrescreve cotacoes ja preenchidas no dia); se nao, cria nova linha.
+5. Atualiza a coluna de log com status e timestamp.
+6. Atualiza o CSV com a linha do ultimo log, substituindo a data se ja existir.
 
 Observacoes importantes (para uso no cliente):
 
@@ -44,6 +45,7 @@ Para economizar processamento e evitar sobrescrever cotacoes do dia, o robo apli
 
 - **USD/BRL (Investing)** e **Dolar Turismo (Valor)**: coleta apenas ate **08:30** (inclusive).
 - **PTAX (BCB)**: coleta apenas a partir de **13:10** (inclusive).
+- As fontes elegiveis dentro da janela rodam em paralelo por padrao (limite com `COTACOES_MAX_WORKERS`).
 - Se nao houver nenhuma fonte elegivel (fora da janela ou colunas do dia ja preenchidas), o robo encerra **sem alterar** `planilhas/cotacoes.xlsx` e `planilhas/cotacoes.csv`.
 
 Cenarios:
@@ -111,6 +113,12 @@ poetry run python main.py
 
 Durante a execucao, o script imprime mensagens de progresso indicando cada fonte
 e quando a planilha/CSV sao atualizados.
+
+Principais mensagens:
+
+- Validacao e selecao das fontes (o que vai rodar e o que foi pulado).
+- Modo de coleta (sequencial ou paralelo / quantidade de workers).
+- Erros de copia em rede (com detalhes das tentativas quando todos os destinos falham).
 
 ## Testes
 
@@ -180,6 +188,14 @@ Proxy (opcional):
 Copia para pasta de rede:
 
 - `COTACOES_NETWORK_DIR` com um ou mais caminhos separados por `;` (ex.: `X:\TEMP\_Publico;Y:\TEMP\_Publico;\\servidor\TEMP\_Publico`).
+
+Pasta na rede (opcional):
+
+- `COTACOES_NETWORK_DEST_FOLDER` define a subpasta criada no destino (padrao: `cotacoes`).
+
+Concorrencia (opcional):
+
+- `COTACOES_MAX_WORKERS` limita quantas fontes rodam em paralelo (ex.: `1` desativa paralelismo).
 
 ## Observacoes
 

@@ -31,7 +31,11 @@ def test_copy_planilhas_to_network(monkeypatch) -> None:
     monkeypatch.setattr(network_sync, "try_to_unc", fake_try_to_unc)
     monkeypatch.setattr(network_sync.shutil, "copytree", fake_copytree)
 
-    main._copy_planilhas_to_network(planilhas_dir, [destino_base])
+    main._copy_planilhas_to_network(
+        planilhas_dir,
+        [destino_base],
+        network_dest_folder="cotacoes",
+    )
 
     target_dir = Path(destino_base) / "cotacoes"
     assert copied == [

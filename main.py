@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -26,7 +27,8 @@ from cotacoes_moedas.redaction import redact_secrets
 
 _USD_SPREAD = Decimal("0.0200")
 _LOCAL_TZ = datetime.now().astimezone().tzinfo or timezone.utc
-_DEFAULT_NETWORK_COPY_DIR = r"X:\TEMP\_Publico;\\192.168.21.25\TEMP\_Publico"
+_DEFAULT_NETWORK_COPY_DIR = r"X:\TEMP\_Publico;\\192.168.21.25\users\TEMP\_Publico"
+_DEFAULT_NETWORK_DEST_FOLDER = "cotacoes"
 _MORNING_QUOTES_CUTOFF_HM = (8, 30)
 _PTAX_AVAILABLE_FROM_HM = (13, 10)
 _SOURCE_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -121,14 +123,63 @@ def _run_fetch(
 
 def _run_fetches(fetch_specs: list[FetchSpec]) -> dict[str, FetchOutcome]:
     outcomes: dict[str, FetchOutcome] = {}
-    for spec in fetch_specs:
-        value, error, elapsed = _run_fetch(spec.label, spec.fetch_fn)
-        outcomes[spec.key] = FetchOutcome(
-            label=spec.label,
-            value=value,
-            error=error,
-            elapsed_s=elapsed,
-        )
+    if not fetch_specs:
+        return outcomes
+
+    max_workers = len(fetch_specs)
+    env_max_workers = os.environ.get("COTACOES_MAX_WORKERS")
+    if env_max_workers:
+        try:
+            max_workers = max(1, min(max_workers, int(env_max_workers)))
+        except ValueError:
+            _log(
+                "Aviso: COTACOES_MAX_WORKERS invalido "
+                f"({env_max_workers!r}). Usando {max_workers}."
+            )
+
+    if max_workers <= 1 or len(fetch_specs) == 1:
+        _log(f"Coleta: {len(fetch_specs)} fonte(s) em modo sequencial.")
+        for spec in fetch_specs:
+            value, error, elapsed = _run_fetch(spec.label, spec.fetch_fn)
+            outcomes[spec.key] = FetchOutcome(
+                label=spec.label,
+                value=value,
+                error=error,
+                elapsed_s=elapsed,
+            )
+        return outcomes
+
+    limit_note = (
+        f" (limitado por COTACOES_MAX_WORKERS={env_max_workers})"
+        if env_max_workers
+        else ""
+    )
+    _log(
+        "Coleta: "
+        f"{len(fetch_specs)} fonte(s) em paralelo ({max_workers} workers){limit_note}."
+    )
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_run_fetch, spec.label, spec.fetch_fn): spec
+            for spec in fetch_specs
+        }
+        for future in as_completed(futures):
+            spec = futures[future]
+            try:
+                value, error, elapsed = future.result()
+            except Exception as exc:
+                detail = _error_detail(spec.label, exc)
+                _log(
+                    f"Falha em {spec.label}. Valores nao atualizados. "
+                    f"Detalhe: {detail}"
+                )
+                value, error, elapsed = None, detail, 0.0
+            outcomes[spec.key] = FetchOutcome(
+                label=spec.label,
+                value=value,
+                error=error,
+                elapsed_s=elapsed,
+            )
     return outcomes
 
 
@@ -160,6 +211,22 @@ def _log_fetch_summary(outcomes: dict[str, FetchOutcome]) -> None:
         f"{fail_count} com erro, "
         f"{skipped} puladas."
     )
+
+
+def _log_fetch_plan(
+    selected_specs: list[FetchSpec],
+    outcomes: dict[str, FetchOutcome],
+) -> None:
+    if selected_specs:
+        labels = "; ".join(spec.label for spec in selected_specs)
+        _log(f"Fontes selecionadas para coleta ({len(selected_specs)}): {labels}")
+    else:
+        _log("Nenhuma fonte selecionada para coleta agora.")
+
+    for key in ("usd_brl", "turismo", "ptax_usd", "ptax_eur", "ptax_chf"):
+        outcome = outcomes.get(key)
+        if outcome and outcome.skipped:
+            _log(f"{outcome.label}: pulado ({outcome.skip_reason})")
 
 
 def _hm(value: datetime) -> tuple[int, int]:
@@ -402,7 +469,12 @@ def _log_quote_summary(outcomes: dict[str, FetchOutcome]) -> None:
         _log("Dolar Turismo: sem dados")
 
 
-def _copy_planilhas_to_network(planilhas_dir: Path, network_dirs: list[str]) -> None:
+def _copy_planilhas_to_network(
+    planilhas_dir: Path,
+    network_dirs: list[str],
+    *,
+    network_dest_folder: str,
+) -> None:
     if not planilhas_dir.exists() or not planilhas_dir.is_dir():
         _log(f"Pasta de planilhas nao encontrada: {planilhas_dir}")
         return
@@ -411,7 +483,7 @@ def _copy_planilhas_to_network(planilhas_dir: Path, network_dirs: list[str]) -> 
     destination_dir, unc_error, copy_error = copiar_pasta_para_rede(
         planilhas_dir,
         network_dirs,
-        nome_pasta_destino="cotacoes",
+        nome_pasta_destino=network_dest_folder,
     )
     if not destination_dir:
         if copy_error:
@@ -459,6 +531,13 @@ def main() -> int:
             _log("Destinos de copia em rede: " + "; ".join(network_copy_dirs))
         else:
             _log("Destinos de copia em rede: nenhum")
+        network_dest_folder = (
+            os.environ.get("COTACOES_NETWORK_DEST_FOLDER")
+            or _DEFAULT_NETWORK_DEST_FOLDER
+        ).strip()
+        if not network_dest_folder:
+            network_dest_folder = _DEFAULT_NETWORK_DEST_FOLDER
+        _log(f"Pasta de destino na rede: {network_dest_folder}")
 
         _log_stage(2, total_steps, "Coletando cotacoes das fontes.")
         now = _now_local()
@@ -477,7 +556,12 @@ def main() -> int:
             duration = _format_duration(time.monotonic() - process_start)
             _log(f"Processo finalizado em {duration} (minutos:segundos).")
             return 0
+        _log(
+            "Validando planilha para decidir quais fontes coletar "
+            "(nao sobrescreve valores ja preenchidos no dia)."
+        )
         selected_specs, outcomes = _select_fetches(now, planilha_path)
+        _log_fetch_plan(selected_specs, outcomes)
         if not selected_specs:
             _log(
                 "Nenhuma fonte elegivel para atualizar agora "
@@ -504,11 +588,19 @@ def main() -> int:
         else:
             _log("Coleta sem falhas.")
 
-        _log_stage(6, total_steps, "Validando pasta 'cotacoes' na rede e copiando planilhas.")
+        _log_stage(
+            6,
+            total_steps,
+            f"Validando pasta '{network_dest_folder}' na rede e copiando planilhas.",
+        )
         if not network_copy_dirs:
             _log("Copia em rede desabilitada.")
         else:
-            _copy_planilhas_to_network(base_dir / "planilhas", network_copy_dirs)
+            _copy_planilhas_to_network(
+                base_dir / "planilhas",
+                network_copy_dirs,
+                network_dest_folder=network_dest_folder,
+            )
         duration = _format_duration(time.monotonic() - process_start)
         _log(f"Processo finalizado em {duration} (minutos:segundos).")
         return 0
