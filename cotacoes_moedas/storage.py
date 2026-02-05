@@ -180,7 +180,7 @@ def _format_log_cell(value: object) -> str:
 def update_xlsx_usd_brl(
     path: str | Path,
     quote: Quote,
-    spread: Decimal = Decimal("0.0200"),
+    spread: Decimal = Decimal("0.0020"),
     *,
     target_date: date | None = None,
     overwrite: bool = True,
@@ -413,7 +413,7 @@ def update_xlsx_quotes_and_log(
     turismo: BidAskQuote | None = None,
     ptax_eur: PtaxQuote | None = None,
     ptax_chf: PtaxQuote | None = None,
-    spread: Decimal = Decimal("0.0200"),
+    spread: Decimal = Decimal("0.0020"),
     overwrite_quotes: bool = False,
     logged_at: datetime | None = None,
     status: str = "OK",

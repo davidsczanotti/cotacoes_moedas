@@ -73,7 +73,7 @@ Ordem do XLSX/CSV:
 
 1. Data
 2. Dolar Oficial Compra (USD/BRL do Investing)
-3. Dolar Oficial Venda (Compra + spread de 0.0200)
+3. Dolar Oficial Venda (Compra + spread de 0.0020)
 4. Dolar PTAX Compra
 5. Dolar PTAX Venda
 6. Dolar Turismo Compra

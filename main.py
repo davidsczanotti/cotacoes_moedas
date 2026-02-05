@@ -25,7 +25,7 @@ from cotacoes_moedas.network_sync import (
 )
 from cotacoes_moedas.redaction import redact_secrets
 
-_USD_SPREAD = Decimal("0.0200")
+_USD_SPREAD = Decimal("0.0020")
 _LOCAL_TZ = datetime.now().astimezone().tzinfo or timezone.utc
 _DEFAULT_NETWORK_COPY_DIR = r"X:\TEMP\_Publico;\\192.168.21.25\users\TEMP\_Publico"
 _DEFAULT_NETWORK_DEST_FOLDER = "cotacoes"

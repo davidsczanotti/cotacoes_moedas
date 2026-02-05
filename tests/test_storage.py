@@ -66,7 +66,7 @@ def test_update_csv_from_xlsx_replaces_same_date(tmp_path: Path) -> None:
         value_raw="5,2849",
         collected_at=collected_at,
     )
-    update_xlsx_usd_brl(xlsx_path, quote, spread=Decimal("0.0200"))
+    update_xlsx_usd_brl(xlsx_path, quote, spread=Decimal("0.0020"))
     update_xlsx_log(xlsx_path, target_date=collected_at.date())
     update_csv_from_xlsx(xlsx_path, csv_path)
 
@@ -76,7 +76,7 @@ def test_update_csv_from_xlsx_replaces_same_date(tmp_path: Path) -> None:
         value_raw="5,3001",
         collected_at=collected_at,
     )
-    update_xlsx_usd_brl(xlsx_path, updated_quote, spread=Decimal("0.0200"))
+    update_xlsx_usd_brl(xlsx_path, updated_quote, spread=Decimal("0.0020"))
     update_xlsx_log(xlsx_path, target_date=collected_at.date())
     update_csv_from_xlsx(xlsx_path, csv_path)
 
@@ -86,7 +86,7 @@ def test_update_csv_from_xlsx_replaces_same_date(tmp_path: Path) -> None:
     data_rows = [row for row in rows if row and row[0] == "23/01/2026"]
     assert len(data_rows) == 1
     assert data_rows[0][1] == "5,3001"
-    assert data_rows[0][2] == "5,3201"
+    assert data_rows[0][2] == "5,3021"
 
 
 def test_update_xlsx_quotes_and_log_fills_only_blanks(tmp_path: Path) -> None:
@@ -134,7 +134,7 @@ def test_update_xlsx_quotes_and_log_fills_only_blanks(tmp_path: Path) -> None:
         usd_brl=usd,
         ptax_usd=ptax_usd,
         turismo=turismo,
-        spread=Decimal("0.0200"),
+        spread=Decimal("0.0020"),
         overwrite_quotes=False,
         logged_at=datetime(2026, 1, 23, 9, 15, 0),
     )
@@ -146,7 +146,7 @@ def test_update_xlsx_quotes_and_log_fills_only_blanks(tmp_path: Path) -> None:
     workbook = load_workbook(xlsx_path)
     sheet = workbook.active
     assert Decimal(str(sheet["B3"].value)).quantize(Decimal("0.0001")) == Decimal("5.0000")
-    assert Decimal(str(sheet["C3"].value)).quantize(Decimal("0.0001")) == Decimal("5.0200")
+    assert Decimal(str(sheet["C3"].value)).quantize(Decimal("0.0001")) == Decimal("5.0020")
     assert Decimal(str(sheet["D3"].value)).quantize(Decimal("0.0001")) == Decimal("5.1000")
     assert Decimal(str(sheet["E3"].value)).quantize(Decimal("0.0001")) == Decimal("5.2000")
     assert Decimal(str(sheet["F3"].value)).quantize(Decimal("0.0001")) == Decimal("5.5000")
@@ -167,7 +167,7 @@ def test_update_xlsx_quotes_and_log_overwrites_when_enabled(tmp_path: Path) -> N
     sheet["A3"].number_format = "dd/mm/yyyy"
     sheet["B3"] = Decimal("4.0000")
     sheet["B3"].number_format = "0.0000"
-    sheet["C3"] = Decimal("4.0200")
+    sheet["C3"] = Decimal("4.0020")
     sheet["C3"].number_format = "0.0000"
     workbook.save(xlsx_path)
     _close_workbook(workbook)
@@ -184,7 +184,7 @@ def test_update_xlsx_quotes_and_log_overwrites_when_enabled(tmp_path: Path) -> N
         xlsx_path,
         target_date=target_date,
         usd_brl=usd,
-        spread=Decimal("0.0200"),
+        spread=Decimal("0.0020"),
         overwrite_quotes=True,
         logged_at=datetime(2026, 1, 23, 9, 15, 0),
     )
@@ -194,5 +194,5 @@ def test_update_xlsx_quotes_and_log_overwrites_when_enabled(tmp_path: Path) -> N
     workbook = load_workbook(xlsx_path)
     sheet = workbook.active
     assert Decimal(str(sheet["B3"].value)).quantize(Decimal("0.0001")) == Decimal("5.2849")
-    assert Decimal(str(sheet["C3"].value)).quantize(Decimal("0.0001")) == Decimal("5.3049")
+    assert Decimal(str(sheet["C3"].value)).quantize(Decimal("0.0001")) == Decimal("5.2869")
     _close_workbook(workbook)
