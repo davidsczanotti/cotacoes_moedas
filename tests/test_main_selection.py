@@ -27,7 +27,12 @@ def test_select_fetches_morning_window_runs_usd_and_turismo(monkeypatch) -> None
 
     assert called["path"] == planilha_path
     assert called["date"] == now.date()
-    assert [spec.key for spec in selected_specs] == ["usd_brl", "turismo"]
+    assert [spec.key for spec in selected_specs] == [
+        "usd_brl",
+        "turismo",
+        "tjlp",
+        "selic",
+    ]
     assert outcomes["ptax_usd"].skipped
     assert outcomes["ptax_usd"].skip_reason == "fora do horario (antes de 13:10)"
     assert outcomes["ptax_eur"].skip_reason == "fora do horario (antes de 13:10)"
@@ -49,6 +54,8 @@ def test_select_fetches_afternoon_window_runs_ptax(monkeypatch) -> None:
     ]
     assert outcomes["usd_brl"].skip_reason == "fora do horario (apos 08:30)"
     assert outcomes["turismo"].skip_reason == "fora do horario (apos 08:30)"
+    assert outcomes["tjlp"].skip_reason == "fora do horario (apos 08:30)"
+    assert outcomes["selic"].skip_reason == "fora do horario (apos 08:30)"
 
 
 def test_select_fetches_between_windows_runs_nothing(monkeypatch) -> None:
@@ -65,6 +72,8 @@ def test_select_fetches_between_windows_runs_nothing(monkeypatch) -> None:
     assert outcomes["ptax_usd"].skip_reason == "fora do horario (antes de 13:10)"
     assert outcomes["ptax_eur"].skip_reason == "fora do horario (antes de 13:10)"
     assert outcomes["ptax_chf"].skip_reason == "fora do horario (antes de 13:10)"
+    assert outcomes["tjlp"].skip_reason == "fora do horario (apos 08:30)"
+    assert outcomes["selic"].skip_reason == "fora do horario (apos 08:30)"
 
 
 def test_select_fetches_skips_filled_fields(monkeypatch) -> None:
@@ -83,3 +92,5 @@ def test_select_fetches_skips_filled_fields(monkeypatch) -> None:
     assert [spec.key for spec in selected_specs] == ["ptax_chf"]
     assert outcomes["ptax_usd"].skip_reason == "ja preenchido na data de hoje"
     assert outcomes["ptax_eur"].skip_reason == "ja preenchido na data de hoje"
+    assert outcomes["tjlp"].skip_reason == "fora do horario (apos 08:30)"
+    assert outcomes["selic"].skip_reason == "fora do horario (apos 08:30)"

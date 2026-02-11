@@ -8,6 +8,8 @@ historico continuo em XLSX e CSV.
 - Coleta USD/BRL (spot) no Investing.
 - Coleta PTAX USD/EUR/CHF no Banco Central (BCB).
 - Coleta Dolar Turismo no Valor Globo.
+- Coleta TJLP no BNDES.
+- Coleta SELIC no BCB (linha mais recente) e calcula CDI diario.
 - Atualiza `planilhas/cotacoes.xlsx` como fonte de verdade.
 - Atualiza `planilhas/cotacoes.csv` com separador `;` e decimal `,`.
 
@@ -17,6 +19,7 @@ historico continuo em XLSX e CSV.
 - `cotacoes_moedas/investing.py`: USD/BRL (Investing).
 - `cotacoes_moedas/valor_globo.py`: Dolar Turismo (Valor).
 - `cotacoes_moedas/bcb_ptax.py`: PTAX (BCB).
+- `cotacoes_moedas/juros.py`: TJLP, SELIC e calculo de CDI.
 - `cotacoes_moedas/storage.py`: escrita no XLSX/CSV.
 - `cotacoes_moedas/network_copy.py`: conversao de drive mapeado -> UNC (Windows).
 - `cotacoes_moedas/network_sync.py`: selecao do destino e copia de `planilhas/` na rede.
@@ -30,8 +33,9 @@ historico continuo em XLSX e CSV.
 2. Busca os dados via Playwright (headless) apenas para as fontes elegiveis (por padrao em paralelo).
 3. Para cada fonte, grava os valores na linha da data local do dia.
 4. Se a data ja existe, preenche apenas colunas vazias (nao sobrescreve cotacoes ja preenchidas no dia); se nao, cria nova linha.
-5. Atualiza a coluna de log com status e timestamp.
-6. Atualiza o CSV com a linha do ultimo log, substituindo a data se ja existir.
+5. Para TJLP/SELIC/CDI, se nao houver valor novo no dia, repete o ultimo valor disponivel.
+6. Atualiza a coluna de log com status e timestamp.
+7. Atualiza o CSV com a linha do ultimo log, substituindo a data se ja existir.
 
 Observacoes importantes (para uso no cliente):
 
@@ -45,6 +49,7 @@ Para economizar processamento e evitar sobrescrever cotacoes do dia, o robo apli
 
 - **USD/BRL (Investing)** e **Dolar Turismo (Valor)**: coleta apenas ate **08:30** (inclusive).
 - **PTAX (BCB)**: coleta apenas a partir de **13:10** (inclusive).
+- **TJLP/SELIC**: coleta apenas ate **08:30** (inclusive).
 - As fontes elegiveis dentro da janela rodam em paralelo por padrao (limite com `COTACOES_MAX_WORKERS`).
 - Se nao houver nenhuma fonte elegivel (fora da janela ou colunas do dia ja preenchidas), o robo encerra **sem alterar** `planilhas/cotacoes.xlsx` e `planilhas/cotacoes.csv`.
 
@@ -59,6 +64,7 @@ Cenarios:
 - Uma linha por data.
 - Execucoes repetidas no mesmo dia nao duplicam linhas.
 - O CSV e atualizado apenas para a data do ultimo log gravado.
+- As colunas TJLP/SELIC/CDI repetem o ultimo valor quando nao houver atualizacao no dia.
 
 ## Tratamento de erros
 
@@ -82,7 +88,10 @@ Ordem do XLSX/CSV:
 9. Euro PTAX Venda
 10. CHF PTAX Compra
 11. CHF PTAX Venda
-12. Log
+12. TJLP
+13. SELIC
+14. CDI
+15. Situacao (log)
 
 ## Pre-requisitos
 

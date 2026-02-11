@@ -28,7 +28,10 @@ def _make_workbook(path: Path) -> None:
     sheet["A1"] = "Data"
     sheet["B1"] = "Dolar Oficial Compra"
     sheet["C1"] = "Dolar Oficial Venda"
-    sheet["L1"] = "Log"
+    sheet["L1"] = "TJLP"
+    sheet["M1"] = "SELIC"
+    sheet["N1"] = "CDI"
+    sheet["O1"] = "Situacao"
     workbook.save(path)
     _close_workbook(workbook)
 
@@ -49,7 +52,7 @@ def test_update_xlsx_log_error_format(tmp_path: Path) -> None:
 
     workbook = load_workbook(xlsx_path)
     sheet = workbook.active
-    assert sheet["L3"].value == "ERRO 23/01/2026 09:15:00 - ptax_usd: Timeout"
+    assert sheet["O3"].value == "ERRO 23/01/2026 09:15:00 - ptax_usd: Timeout"
     _close_workbook(workbook)
 
 
@@ -87,6 +90,29 @@ def test_update_csv_from_xlsx_replaces_same_date(tmp_path: Path) -> None:
     assert len(data_rows) == 1
     assert data_rows[0][1] == "5,3001"
     assert data_rows[0][2] == "5,3021"
+    assert rows[0][11:] == ["TJLP", "SELIC", "CDI", "Situacao"]
+
+
+def test_update_csv_from_xlsx_reads_legacy_log_column(tmp_path: Path) -> None:
+    xlsx_path = tmp_path / "cotacoes.xlsx"
+    csv_path = tmp_path / "cotacoes.csv"
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "Data"
+    sheet["L1"] = "Log"
+    sheet["A3"] = date(2026, 1, 23)
+    sheet["L3"] = "OK 23/01/2026 16:00:00"
+    workbook.save(xlsx_path)
+    _close_workbook(workbook)
+
+    update_csv_from_xlsx(xlsx_path, csv_path)
+
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle, delimiter=";"))
+
+    assert rows[1][0] == "23/01/2026"
+    assert rows[1][14] == "OK 23/01/2026 16:00:00"
 
 
 def test_update_xlsx_quotes_and_log_fills_only_blanks(tmp_path: Path) -> None:
@@ -134,6 +160,9 @@ def test_update_xlsx_quotes_and_log_fills_only_blanks(tmp_path: Path) -> None:
         usd_brl=usd,
         ptax_usd=ptax_usd,
         turismo=turismo,
+        tjlp=Decimal("9.19"),
+        selic=Decimal("15.00"),
+        cdi=Decimal("0.0551310642"),
         spread=Decimal("0.0020"),
         overwrite_quotes=False,
         logged_at=datetime(2026, 1, 23, 9, 15, 0),
@@ -142,6 +171,8 @@ def test_update_xlsx_quotes_and_log_fills_only_blanks(tmp_path: Path) -> None:
     assert written["usd_brl"] == ("venda",)
     assert written["ptax_usd"] == ("compra", "venda")
     assert written["turismo"] == ("compra", "venda")
+    assert written["tjlp"] == ("valor",)
+    assert written["selic"] == ("selic", "cdi")
 
     workbook = load_workbook(xlsx_path)
     sheet = workbook.active
@@ -151,7 +182,10 @@ def test_update_xlsx_quotes_and_log_fills_only_blanks(tmp_path: Path) -> None:
     assert Decimal(str(sheet["E3"].value)).quantize(Decimal("0.0001")) == Decimal("5.2000")
     assert Decimal(str(sheet["F3"].value)).quantize(Decimal("0.0001")) == Decimal("5.5000")
     assert Decimal(str(sheet["G3"].value)).quantize(Decimal("0.0001")) == Decimal("5.6000")
-    assert sheet["L3"].value == "OK 23/01/2026 09:15:00"
+    assert Decimal(str(sheet["L3"].value)).quantize(Decimal("0.0001")) == Decimal("0.0919")
+    assert Decimal(str(sheet["M3"].value)).quantize(Decimal("0.0001")) == Decimal("0.1500")
+    assert Decimal(str(sheet["N3"].value)).quantize(Decimal("0.0000000001")) == Decimal("0.0551310642")
+    assert sheet["O3"].value == "OK 23/01/2026 09:15:00"
     _close_workbook(workbook)
 
 
@@ -195,4 +229,47 @@ def test_update_xlsx_quotes_and_log_overwrites_when_enabled(tmp_path: Path) -> N
     sheet = workbook.active
     assert Decimal(str(sheet["B3"].value)).quantize(Decimal("0.0001")) == Decimal("5.2849")
     assert Decimal(str(sheet["C3"].value)).quantize(Decimal("0.0001")) == Decimal("5.2869")
+    _close_workbook(workbook)
+
+
+def test_update_xlsx_quotes_and_log_repeats_last_interest_values(tmp_path: Path) -> None:
+    xlsx_path = tmp_path / "cotacoes.xlsx"
+    _make_workbook(xlsx_path)
+
+    workbook = load_workbook(xlsx_path)
+    sheet = workbook.active
+    sheet["A3"] = date(2026, 1, 22)
+    sheet["A3"].number_format = "dd/mm/yyyy"
+    sheet["L3"] = Decimal("0.0919")
+    sheet["M3"] = Decimal("0.1500")
+    sheet["N3"] = Decimal("0.0551310642")
+    workbook.save(xlsx_path)
+    _close_workbook(workbook)
+
+    target_date = date(2026, 1, 23)
+    collected_at = datetime(2026, 1, 23, 12, 0, 0, tzinfo=timezone.utc)
+    usd = Quote(
+        symbol="USD/BRL",
+        value=Decimal("5.2849"),
+        value_raw="5,2849",
+        collected_at=collected_at,
+    )
+
+    written = update_xlsx_quotes_and_log(
+        xlsx_path,
+        target_date=target_date,
+        usd_brl=usd,
+        spread=Decimal("0.0020"),
+        overwrite_quotes=False,
+        logged_at=datetime(2026, 1, 23, 9, 15, 0),
+    )
+
+    assert written["tjlp"] == ("valor_repetido",)
+    assert written["selic"] == ("selic_repetido", "cdi_repetido")
+
+    workbook = load_workbook(xlsx_path)
+    sheet = workbook.active
+    assert Decimal(str(sheet["L4"].value)).quantize(Decimal("0.0001")) == Decimal("0.0919")
+    assert Decimal(str(sheet["M4"].value)).quantize(Decimal("0.0001")) == Decimal("0.1500")
+    assert Decimal(str(sheet["N4"].value)).quantize(Decimal("0.0000000001")) == Decimal("0.0551310642")
     _close_workbook(workbook)

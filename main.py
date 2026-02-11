@@ -11,10 +11,13 @@ from typing import Callable
 from openpyxl import load_workbook
 
 from cotacoes_moedas import (
+    calculate_cdi_daily_percent,
     fetch_chf_ptax,
     fetch_dolar_ptax,
     fetch_dolar_turismo,
     fetch_euro_ptax,
+    fetch_selic,
+    fetch_tjlp,
     fetch_usd_brl,
     update_csv_from_xlsx,
     update_xlsx_quotes_and_log,
@@ -37,6 +40,8 @@ _SOURCE_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "turismo": ("F", "G"),
     "ptax_eur": ("H", "I"),
     "ptax_chf": ("J", "K"),
+    "tjlp": ("L",),
+    "selic": ("M", "N"),
 }
 _SOURCE_LABELS: dict[str, str] = {
     "usd_brl": "USD/BRL (Investing)",
@@ -44,6 +49,8 @@ _SOURCE_LABELS: dict[str, str] = {
     "ptax_eur": "PTAX EUR",
     "ptax_chf": "PTAX CHF",
     "turismo": "Dolar Turismo (Valor)",
+    "tjlp": "TJLP (BNDES)",
+    "selic": "SELIC (BCB)",
 }
 
 
@@ -223,7 +230,15 @@ def _log_fetch_plan(
     else:
         _log("Nenhuma fonte selecionada para coleta agora.")
 
-    for key in ("usd_brl", "turismo", "ptax_usd", "ptax_eur", "ptax_chf"):
+    for key in (
+        "usd_brl",
+        "turismo",
+        "ptax_usd",
+        "ptax_eur",
+        "ptax_chf",
+        "tjlp",
+        "selic",
+    ):
         outcome = outcomes.get(key)
         if outcome and outcome.skipped:
             _log(f"{outcome.label}: pulado ({outcome.skip_reason})")
@@ -329,6 +344,16 @@ def _select_fetches(
             label=_SOURCE_LABELS["turismo"],
             fetch_fn=fetch_dolar_turismo,
         ),
+        "tjlp": FetchSpec(
+            key="tjlp",
+            label=_SOURCE_LABELS["tjlp"],
+            fetch_fn=fetch_tjlp,
+        ),
+        "selic": FetchSpec(
+            key="selic",
+            label=_SOURCE_LABELS["selic"],
+            fetch_fn=fetch_selic,
+        ),
     }
 
     selected: list[FetchSpec] = []
@@ -350,6 +375,14 @@ def _select_fetches(
         else:
             selected.append(all_specs[key])
 
+    for key in ("tjlp", "selic"):
+        if not allow_morning_quotes:
+            outcomes[key] = _skip_outcome(key, "fora do horario (apos 08:30)")
+        elif filled.get(key, False):
+            outcomes[key] = _skip_outcome(key, "ja preenchido na data de hoje")
+        else:
+            selected.append(all_specs[key])
+
     return selected, outcomes
 
 
@@ -361,8 +394,21 @@ def _update_planilha(
 ) -> dict[str, tuple[str, ...]]:
     _log(f"Atualizando planilha: {planilha_path} (gravacao unica)")
 
-    status = "ERRO" if errors else "OK"
-    detail = " | ".join(errors) if errors else None
+    all_errors = list(errors)
+    tjlp_quote = outcomes["tjlp"].value
+    selic_quote = outcomes["selic"].value
+    selic_percent = selic_quote.value if selic_quote else None
+    cdi_daily_percent = None
+    if selic_percent is not None:
+        try:
+            cdi_daily_percent = calculate_cdi_daily_percent(selic_percent)
+        except Exception as exc:
+            all_errors.append(_error_detail("CDI", exc))
+
+    errors[:] = all_errors
+
+    status = "ERRO" if all_errors else "OK"
+    detail = " | ".join(all_errors) if all_errors else None
 
     written = update_xlsx_quotes_and_log(
         planilha_path,
@@ -372,6 +418,9 @@ def _update_planilha(
         ptax_eur=outcomes["ptax_eur"].value,
         ptax_chf=outcomes["ptax_chf"].value,
         turismo=outcomes["turismo"].value,
+        tjlp=tjlp_quote.value if tjlp_quote else None,
+        selic=selic_percent,
+        cdi=cdi_daily_percent,
         spread=_USD_SPREAD,
         overwrite_quotes=False,
         logged_at=_now_local(),
@@ -382,21 +431,40 @@ def _update_planilha(
     def _describe_fields(fields: tuple[str, ...]) -> str:
         if not fields:
             return "nao gravou (ja preenchido na planilha)"
-        if len(fields) == 2:
+        if fields == ("compra", "venda"):
             return "gravou compra e venda"
-        return "gravou " + " e ".join(fields)
+        descriptions = {
+            "valor": "valor",
+            "valor_repetido": "ultimo valor",
+            "selic": "SELIC",
+            "selic_repetido": "SELIC (ultimo valor)",
+            "cdi": "CDI",
+            "cdi_repetido": "CDI (ultimo valor)",
+        }
+        return "gravou " + " e ".join(descriptions.get(field, field) for field in fields)
 
-    for key in ("usd_brl", "turismo", "ptax_usd", "ptax_eur", "ptax_chf"):
+    for key in (
+        "usd_brl",
+        "turismo",
+        "ptax_usd",
+        "ptax_eur",
+        "ptax_chf",
+        "tjlp",
+        "selic",
+    ):
         outcome = outcomes[key]
+        fields = written.get(key, ())
         if outcome.skipped:
             _log(f"{outcome.label} pulado: {outcome.skip_reason}")
             continue
-        if outcome.value is None:
+        if outcome.value is None and not fields:
             _log(f"{outcome.label}: sem dados; planilha nao atualizada para esta fonte.")
             continue
-        _log(f"{outcome.label}: {_describe_fields(written.get(key, ()))}.")
+        _log(f"{outcome.label}: {_describe_fields(fields)}.")
 
-    has_quotes = any(outcomes[key].value is not None for key in written)
+    has_quotes = any(
+        outcome.value is not None for outcome in outcomes.values() if not outcome.skipped
+    )
     wrote_any = any(fields for fields in written.values())
     if has_quotes and not wrote_any:
         _log(
@@ -467,6 +535,41 @@ def _log_quote_summary(outcomes: dict[str, FetchOutcome]) -> None:
         _log(f"Dolar Turismo: pulado ({turismo_outcome.skip_reason})")
     else:
         _log("Dolar Turismo: sem dados")
+
+    tjlp_outcome = outcomes["tjlp"]
+    tjlp = tjlp_outcome.value
+    if tjlp:
+        _log(
+            "TJLP: "
+            f"{tjlp.value:.4f}% em {tjlp.collected_at.astimezone(_LOCAL_TZ)}"
+        )
+    elif tjlp_outcome.skipped:
+        _log(f"TJLP: pulado ({tjlp_outcome.skip_reason})")
+    else:
+        _log("TJLP: sem dados")
+
+    selic_outcome = outcomes["selic"]
+    selic = selic_outcome.value
+    if selic:
+        details = (
+            f"{selic.value:.4f}%"
+            f" (referencia {selic.reference_date.strftime('%d/%m/%Y')})"
+            if selic.reference_date
+            else f"{selic.value:.4f}%"
+        )
+        _log(
+            "SELIC: "
+            f"{details} em {selic.collected_at.astimezone(_LOCAL_TZ)}"
+        )
+        try:
+            cdi = calculate_cdi_daily_percent(selic.value)
+            _log(f"CDI (calculado): {cdi:.10f}")
+        except Exception as exc:
+            _log(f"CDI (calculado): erro ({exc.__class__.__name__}: {exc})")
+    elif selic_outcome.skipped:
+        _log(f"SELIC: pulado ({selic_outcome.skip_reason})")
+    else:
+        _log("SELIC: sem dados")
 
 
 def _copy_planilhas_to_network(
@@ -546,7 +649,8 @@ def main() -> int:
             "Horario local atual: "
             f"{now.strftime('%H:%M')} "
             f"(Investing/Valor ate {(_MORNING_QUOTES_CUTOFF_HM[0]):02d}:{(_MORNING_QUOTES_CUTOFF_HM[1]):02d}; "
-            f"PTAX apos {(_PTAX_AVAILABLE_FROM_HM[0]):02d}:{(_PTAX_AVAILABLE_FROM_HM[1]):02d})."
+            f"PTAX apos {(_PTAX_AVAILABLE_FROM_HM[0]):02d}:{(_PTAX_AVAILABLE_FROM_HM[1]):02d}; "
+            "TJLP/SELIC ate 08:30)."
         )
         if now_hm > _MORNING_QUOTES_CUTOFF_HM and now_hm < _PTAX_AVAILABLE_FROM_HM:
             _log(

@@ -15,12 +15,39 @@ from .valor_globo import BidAskQuote
 
 
 _DECIMAL_4 = Decimal("0.0001")
+_DECIMAL_10 = Decimal("0.0000000001")
 _DATE_PATTERN = re.compile(r"^\d{2}/\d{2}/\d{4}$")
 _LOCAL_TZ = datetime.now().astimezone().tzinfo or timezone.utc
+_LOG_COLUMN_INDEX = 15
+_TJLP_COLUMN = "L"
+_SELIC_COLUMN = "M"
+_CDI_COLUMN = "N"
+_LOG_COLUMN = "O"
+_DEFAULT_CSV_HEADER = [
+    "Data",
+    "Dolar Oficial Compra",
+    "Dolar Oficial Venda",
+    "Dolar PTAX Compra",
+    "Dolar PTAX Venda",
+    "Dolar Turismo Compra",
+    "Dolar Turismo Venda",
+    "Euro PTAX Compra",
+    "Euro PTAX Venda",
+    "CHF PTAX Compra",
+    "CHF PTAX Venda",
+    "TJLP",
+    "SELIC",
+    "CDI",
+    "Situacao",
+]
 
 
 def _quantize_4(value: Decimal) -> Decimal:
     return value.quantize(_DECIMAL_4, rounding=ROUND_HALF_UP)
+
+
+def _quantize_10(value: Decimal) -> Decimal:
+    return value.quantize(_DECIMAL_10, rounding=ROUND_HALF_UP)
 
 
 def _is_blank(value: object) -> bool:
@@ -48,6 +75,65 @@ def _set_cell(
     return True
 
 
+def _looks_like_log(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = " ".join(value.split()).upper()
+    return text.startswith("OK ") or text.startswith("ERRO ")
+
+
+def _ensure_layout(sheet) -> None:
+    # Mantem compatibilidade com planilhas antigas (log na coluna L).
+    sheet["L1"] = "TJLP"
+    sheet["M1"] = "SELIC"
+    sheet["N1"] = "CDI"
+    sheet["O1"] = "Situacao"
+
+    for row in range(3, sheet.max_row + 1):
+        old_log = sheet.cell(row=row, column=12).value
+        if not _looks_like_log(old_log):
+            continue
+        new_log = sheet.cell(row=row, column=_LOG_COLUMN_INDEX).value
+        if _is_blank(new_log):
+            sheet.cell(row=row, column=_LOG_COLUMN_INDEX).value = str(old_log).strip()
+        sheet.cell(row=row, column=12).value = None
+
+
+def _find_previous_non_blank_value(
+    sheet,
+    start_row: int,
+    column_index: int,
+) -> object | None:
+    for row in range(start_row - 1, 2, -1):
+        if not _coerce_date(sheet.cell(row=row, column=1).value):
+            continue
+        value = sheet.cell(row=row, column=column_index).value
+        if not _is_blank(value):
+            return value
+    return None
+
+
+def _repeat_previous_value_if_blank(
+    sheet,
+    row: int,
+    column_index: int,
+    *,
+    number_format: str | None = None,
+) -> bool:
+    cell = sheet.cell(row=row, column=column_index)
+    if not _is_blank(cell.value):
+        return False
+
+    previous = _find_previous_non_blank_value(sheet, row, column_index)
+    if _is_blank(previous):
+        return False
+
+    cell.value = previous
+    if number_format:
+        cell.number_format = number_format
+    return True
+
+
 def _load_and_save_workbook(
     path: Path,
     apply_updates: Callable[[object], object],
@@ -55,6 +141,7 @@ def _load_and_save_workbook(
     workbook = load_workbook(path)
     try:
         sheet = workbook.active
+        _ensure_layout(sheet)
         result = apply_updates(sheet)
         workbook.save(path)
         return result
@@ -127,7 +214,7 @@ def _find_last_updated_row(sheet) -> int:
     for row in range(3, sheet.max_row + 1):
         if _coerce_date(sheet.cell(row=row, column=1).value):
             last_date = row
-        if sheet.cell(row=row, column=12).value:
+        if sheet.cell(row=row, column=_LOG_COLUMN_INDEX).value:
             last_logged = row
     if last_logged is not None:
         return last_logged
@@ -167,6 +254,25 @@ def _format_number_cell(value: object) -> str:
         return ""
     formatted = _quantize_4(number)
     return f"{formatted:.4f}".replace(".", ",")
+
+
+def _format_percent_cell(value: object) -> str:
+    number = _to_decimal(value)
+    if number is None:
+        return ""
+    # Compatibilidade: em planilhas novas o valor fica fracionario (0,0919),
+    # em planilhas antigas pode aparecer em pontos percentuais (9,19).
+    normalized = number if abs(number) > 1 else number * Decimal("100")
+    formatted = _quantize_4(normalized)
+    return f"{formatted:.4f}".replace(".", ",") + "%"
+
+
+def _format_cdi_cell(value: object) -> str:
+    number = _to_decimal(value)
+    if number is None:
+        return ""
+    formatted = _quantize_10(number)
+    return f"{formatted:.10f}".replace(".", ",")
 
 
 def _format_log_cell(value: object) -> str:
@@ -399,7 +505,7 @@ def update_xlsx_log(
         else:
             cell_value = f"{status_text} {timestamp}"
 
-        _set_cell(sheet, f"L{row}", cell_value, overwrite=True)
+        _set_cell(sheet, f"{_LOG_COLUMN}{row}", cell_value, overwrite=True)
 
     _load_and_save_workbook(target, _apply)
 
@@ -413,6 +519,9 @@ def update_xlsx_quotes_and_log(
     turismo: BidAskQuote | None = None,
     ptax_eur: PtaxQuote | None = None,
     ptax_chf: PtaxQuote | None = None,
+    tjlp: Decimal | None = None,
+    selic: Decimal | None = None,
+    cdi: Decimal | None = None,
     spread: Decimal = Decimal("0.0020"),
     overwrite_quotes: bool = False,
     logged_at: datetime | None = None,
@@ -440,9 +549,13 @@ def update_xlsx_quotes_and_log(
 
         written: dict[str, tuple[str, ...]] = {}
 
+        def _append_written(source: str, field: str) -> None:
+            existing = list(written.get(source, ()))
+            existing.append(field)
+            written[source] = tuple(existing)
+
         if usd_brl:
             compra = _quantize_4(usd_brl.value)
-            updated: list[str] = []
 
             buy_address = f"B{row}"
             existing_buy = sheet[buy_address].value
@@ -454,7 +567,7 @@ def update_xlsx_quotes_and_log(
                 overwrite=overwrite_quotes,
             )
             if wrote_buy:
-                updated.append("compra")
+                _append_written("usd_brl", "compra")
 
             buy_for_sale = compra
             if not wrote_buy and not _is_blank(existing_buy):
@@ -473,13 +586,11 @@ def update_xlsx_quotes_and_log(
                 number_format="0.0000",
                 overwrite=overwrite_quotes,
             ):
-                updated.append("venda")
-            written["usd_brl"] = tuple(updated)
+                _append_written("usd_brl", "venda")
 
         if ptax_usd:
             compra = _quantize_4(ptax_usd.buy)
             venda = _quantize_4(ptax_usd.sell)
-            updated = []
             if _set_cell(
                 sheet,
                 f"D{row}",
@@ -487,7 +598,7 @@ def update_xlsx_quotes_and_log(
                 number_format="0.0000",
                 overwrite=overwrite_quotes,
             ):
-                updated.append("compra")
+                _append_written("ptax_usd", "compra")
             if _set_cell(
                 sheet,
                 f"E{row}",
@@ -495,13 +606,11 @@ def update_xlsx_quotes_and_log(
                 number_format="0.0000",
                 overwrite=overwrite_quotes,
             ):
-                updated.append("venda")
-            written["ptax_usd"] = tuple(updated)
+                _append_written("ptax_usd", "venda")
 
         if turismo:
             compra = _quantize_4(turismo.buy)
             venda = _quantize_4(turismo.sell)
-            updated = []
             if _set_cell(
                 sheet,
                 f"F{row}",
@@ -509,7 +618,7 @@ def update_xlsx_quotes_and_log(
                 number_format="0.0000",
                 overwrite=overwrite_quotes,
             ):
-                updated.append("compra")
+                _append_written("turismo", "compra")
             if _set_cell(
                 sheet,
                 f"G{row}",
@@ -517,13 +626,11 @@ def update_xlsx_quotes_and_log(
                 number_format="0.0000",
                 overwrite=overwrite_quotes,
             ):
-                updated.append("venda")
-            written["turismo"] = tuple(updated)
+                _append_written("turismo", "venda")
 
         if ptax_eur:
             compra = _quantize_4(ptax_eur.buy)
             venda = _quantize_4(ptax_eur.sell)
-            updated = []
             if _set_cell(
                 sheet,
                 f"H{row}",
@@ -531,7 +638,7 @@ def update_xlsx_quotes_and_log(
                 number_format="0.0000",
                 overwrite=overwrite_quotes,
             ):
-                updated.append("compra")
+                _append_written("ptax_eur", "compra")
             if _set_cell(
                 sheet,
                 f"I{row}",
@@ -539,13 +646,11 @@ def update_xlsx_quotes_and_log(
                 number_format="0.0000",
                 overwrite=overwrite_quotes,
             ):
-                updated.append("venda")
-            written["ptax_eur"] = tuple(updated)
+                _append_written("ptax_eur", "venda")
 
         if ptax_chf:
             compra = _quantize_4(ptax_chf.buy)
             venda = _quantize_4(ptax_chf.sell)
-            updated = []
             if _set_cell(
                 sheet,
                 f"J{row}",
@@ -553,7 +658,7 @@ def update_xlsx_quotes_and_log(
                 number_format="0.0000",
                 overwrite=overwrite_quotes,
             ):
-                updated.append("compra")
+                _append_written("ptax_chf", "compra")
             if _set_cell(
                 sheet,
                 f"K{row}",
@@ -561,8 +666,66 @@ def update_xlsx_quotes_and_log(
                 number_format="0.0000",
                 overwrite=overwrite_quotes,
             ):
-                updated.append("venda")
-            written["ptax_chf"] = tuple(updated)
+                _append_written("ptax_chf", "venda")
+
+        tjlp_percent = _to_decimal(tjlp) if tjlp is not None else None
+        if tjlp_percent is not None:
+            tjlp_fraction = _quantize_4(tjlp_percent / Decimal("100"))
+            if _set_cell(
+                sheet,
+                f"{_TJLP_COLUMN}{row}",
+                tjlp_fraction,
+                number_format="0.0000%",
+                overwrite=overwrite_quotes,
+            ):
+                _append_written("tjlp", "valor")
+
+        selic_percent = _to_decimal(selic) if selic is not None else None
+        if selic_percent is not None:
+            selic_fraction = _quantize_4(selic_percent / Decimal("100"))
+            if _set_cell(
+                sheet,
+                f"{_SELIC_COLUMN}{row}",
+                selic_fraction,
+                number_format="0.0000%",
+                overwrite=overwrite_quotes,
+            ):
+                _append_written("selic", "selic")
+
+        cdi_percent = _to_decimal(cdi) if cdi is not None else None
+        if cdi_percent is not None:
+            cdi_value = _quantize_10(cdi_percent)
+            if _set_cell(
+                sheet,
+                f"{_CDI_COLUMN}{row}",
+                cdi_value,
+                number_format="0.0000000000",
+                overwrite=overwrite_quotes,
+            ):
+                _append_written("selic", "cdi")
+
+        # Regras do cliente: se nao houver novo valor de juros no dia, repete o ultimo.
+        if _repeat_previous_value_if_blank(
+            sheet,
+            row,
+            12,
+            number_format="0.0000%",
+        ):
+            _append_written("tjlp", "valor_repetido")
+        if _repeat_previous_value_if_blank(
+            sheet,
+            row,
+            13,
+            number_format="0.0000%",
+        ):
+            _append_written("selic", "selic_repetido")
+        if _repeat_previous_value_if_blank(
+            sheet,
+            row,
+            14,
+            number_format="0.0000000000",
+        ):
+            _append_written("selic", "cdi_repetido")
 
         when = _as_local_datetime(logged_at) if logged_at else datetime.now(_LOCAL_TZ)
         timestamp = when.strftime("%d/%m/%Y %H:%M:%S")
@@ -573,7 +736,7 @@ def update_xlsx_quotes_and_log(
         else:
             cell_value = f"{status_text} {timestamp}"
 
-        _set_cell(sheet, f"L{row}", cell_value, overwrite=True)
+        _set_cell(sheet, f"{_LOG_COLUMN}{row}", cell_value, overwrite=True)
         return written
 
     return _load_and_save_workbook(target, _apply)
@@ -590,75 +753,56 @@ def update_csv_from_xlsx(
     workbook = load_workbook(source, data_only=True)
     try:
         sheet = workbook.active
+        _ensure_layout(sheet)
         row = _find_last_updated_row(sheet)
+        row_values = [sheet.cell(row=row, column=col).value for col in range(1, 16)]
     finally:
         close = getattr(workbook, "close", None)
         if callable(close):
             close()
 
-    date_value = _format_date_cell(sheet.cell(row=row, column=1).value)
+    date_value = _format_date_cell(row_values[0])
     if not date_value:
         raise ValueError("data da linha nao encontrada para atualizar o CSV")
 
     data_row = [date_value]
-    for col in range(2, 12):
-        data_row.append(_format_number_cell(sheet.cell(row=row, column=col).value))
-    data_row.append(_format_log_cell(sheet.cell(row=row, column=12).value))
-
-    default_header = [
-        "Data",
-        "Dolar Oficial Compra",
-        "Dolar Oficial Venda",
-        "Dolar PTAX Compra",
-        "Dolar PTAX Venda",
-        "Dolar Turismo Compra",
-        "Dolar Turismo Venda",
-        "Euro PTAX Compra",
-        "Euro PTAX Venda",
-        "CHF PTAX Compra",
-        "CHF PTAX Venda",
-        "Log",
-    ]
+    for index in range(1, 11):
+        data_row.append(_format_number_cell(row_values[index]))
+    data_row.append(_format_percent_cell(row_values[11]))
+    data_row.append(_format_percent_cell(row_values[12]))
+    data_row.append(_format_cdi_cell(row_values[13]))
+    data_row.append(_format_log_cell(row_values[14]))
 
     target = Path(csv_path)
-    rows: list[list[str]] = []
+    existing_rows: list[list[str]] = []
     if target.exists():
         for encoding in ("utf-8", "latin-1"):
             try:
                 with target.open("r", encoding=encoding, newline="") as handle:
                     reader = csv.reader(handle, delimiter=";")
-                    rows = list(reader)
+                    existing_rows = list(reader)
                 break
             except UnicodeDecodeError:
-                rows = []
+                existing_rows = []
                 continue
 
-    if not rows or all(len(row) <= 1 for row in rows):
-        rows = [default_header, data_row]
-    else:
-        header_rows: list[list[str]] = []
-        data_rows: list[list[str]] = []
-        for row_values in rows:
-            if row_values and _DATE_PATTERN.match(row_values[0]):
-                data_rows.append(row_values)
-            else:
-                header_rows.append(row_values)
-
-        if not header_rows:
-            header_rows = [default_header]
-
-        replaced = False
-        new_data_rows: list[list[str]] = []
-        for row_values in data_rows:
-            if row_values and row_values[0] == date_value:
-                new_data_rows.append(data_row)
-                replaced = True
-            else:
-                new_data_rows.append(row_values)
-        if not replaced:
+    data_rows = [
+        row_values
+        for row_values in existing_rows
+        if row_values and _DATE_PATTERN.match(row_values[0])
+    ]
+    replaced = False
+    new_data_rows: list[list[str]] = []
+    for row_values in data_rows:
+        if row_values[0] == date_value:
             new_data_rows.append(data_row)
+            replaced = True
+        else:
+            new_data_rows.append(row_values)
+    if not replaced:
+        new_data_rows.append(data_row)
 
-        rows = header_rows + new_data_rows
+    rows = [_DEFAULT_CSV_HEADER] + new_data_rows
 
     with target.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter=";", quoting=csv.QUOTE_MINIMAL)
