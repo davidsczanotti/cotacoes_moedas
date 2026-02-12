@@ -29,19 +29,24 @@ historico continuo em XLSX e CSV.
 
 ## Como funciona
 
-1. Valida a planilha para decidir quais fontes coletar (janela de horario + campos vazios no dia).
-2. Busca os dados via Playwright (headless) apenas para as fontes elegiveis (por padrao em paralelo).
-3. Para cada fonte, grava os valores na linha da data local do dia.
-4. Se a data ja existe, preenche apenas colunas vazias (nao sobrescreve cotacoes ja preenchidas no dia); se nao, cria nova linha.
-5. Para TJLP/SELIC/CDI, se nao houver valor novo no dia, repete o ultimo valor disponivel.
-6. Atualiza a coluna de log com status e timestamp.
-7. Atualiza o CSV com a linha do ultimo log, substituindo a data se ja existir.
+1. Valida a planilha de referencia na rede (`<destino>/cotacoes/planilhas/cotacoes.xlsx`) para decidir quais fontes coletar (janela de horario + campos vazios no dia).
+2. Sincroniza a base local (`planilhas/cotacoes.xlsx` e `planilhas/cotacoes.csv`) a partir da referencia da rede antes de atualizar.
+3. Busca os dados via Playwright (headless) apenas para as fontes elegiveis (por padrao em paralelo).
+4. Para cada fonte, grava os valores na linha da data local do dia.
+5. Se a data ja existe, preenche apenas colunas vazias (nao sobrescreve cotacoes ja preenchidas no dia); se nao, cria nova linha.
+6. Para TJLP/SELIC/CDI, se nao houver valor novo no dia, repete o ultimo valor disponivel.
+7. Atualiza a coluna de log com status e timestamp.
+8. Atualiza o CSV com a linha do ultimo log, substituindo a data se ja existir.
+9. Copia para a rede e valida no final se a linha esperada ficou consistente (local e rede).
 
 Observacoes importantes (para uso no cliente):
 
 - A atualizacao do `cotacoes.xlsx` e feita com **uma unica gravacao** no arquivo (menos chance de erro e mais rapido).
 - Se alguma celula do dia ja estiver preenchida, ela **nao e sobrescrita**; o console vai mostrar `nao gravou (ja preenchido na planilha)`.
 - Se aparecer `ERRO ao gravar arquivos`, normalmente e porque o `cotacoes.xlsx`/`cotacoes.csv` esta aberto no Excel ou a permissao da pasta nao permite escrita.
+- A validacao de "ja preenchido no dia" usa a planilha na rede; se ela nao for encontrada no destino configurado, o robo copia `planilhas/` local para a rede e continua a execucao (se a copia falhar, a execucao e abortada).
+- Antes de extrair os valores, o robo valida a consistencia estrutural de cada pagina (URL/seletores-base); se o layout mudar, registra erro detalhado para facilitar rastreio da alteracao.
+- Ao final, o robo valida a consistencia da linha da data (local e rede); se detectar regressao de preenchimento, aborta com erro.
 
 ## Regras de horario (janelas)
 

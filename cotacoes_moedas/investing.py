@@ -7,6 +7,11 @@ from decimal import Decimal
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .parsing import ParseDecimalError, parse_pt_br_decimal
+from .page_consistency import (
+    PageCheck,
+    PageConsistencyError,
+    ensure_page_consistency,
+)
 from .playwright_utils import chromium_page, proxy_from_env
 
 
@@ -37,11 +42,33 @@ def fetch_usd_brl(
             page.goto(USD_BRL_URL, wait_until="commit", timeout=timeout_ms)
             locator = page.locator(USD_BRL_SELECTOR).first
             locator.wait_for(state="visible", timeout=timeout_ms)
+            ensure_page_consistency(
+                page,
+                source="Investing USD/BRL",
+                checks=[
+                    PageCheck(
+                        "url esperada",
+                        lambda p: (
+                            "currencies/usd-brl" in (p.url or "").lower(),
+                            f"url atual: {p.url}",
+                        ),
+                    ),
+                    PageCheck(
+                        "seletor principal",
+                        lambda p: (
+                            p.locator(USD_BRL_SELECTOR).count() > 0,
+                            f"seletor ausente: {USD_BRL_SELECTOR}",
+                        ),
+                    ),
+                ],
+            )
             raw_value = locator.inner_text().strip()
     except PlaywrightTimeoutError as exc:
         raise PriceParseError(
             "timeout ao aguardar o valor em instrument-price-last"
         ) from exc
+    except PageConsistencyError as exc:
+        raise PriceParseError(str(exc)) from exc
 
     if not raw_value:
         raise PriceParseError("nao encontrou o valor em instrument-price-last")

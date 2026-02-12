@@ -8,6 +8,11 @@ import re
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .parsing import ParseDecimalError, parse_pt_br_decimal
+from .page_consistency import (
+    PageCheck,
+    PageConsistencyError,
+    ensure_page_consistency,
+)
 from .playwright_utils import chromium_page, proxy_from_env
 
 
@@ -43,6 +48,26 @@ def fetch_dolar_turismo(
 
             row = page.locator("tr", has_text=ROW_LABEL_RE).first
             row.wait_for(state="visible", timeout=timeout_ms)
+            ensure_page_consistency(
+                page,
+                source="Valor Dolar Turismo",
+                checks=[
+                    PageCheck(
+                        "url esperada",
+                        lambda p: (
+                            "valor.globo.com" in (p.url or "").lower(),
+                            f"url atual: {p.url}",
+                        ),
+                    ),
+                    PageCheck(
+                        "linha Dolar Turismo",
+                        lambda p: (
+                            p.locator("tr", has_text=ROW_LABEL_RE).count() > 0,
+                            "linha de Dolar Turismo nao encontrada",
+                        ),
+                    ),
+                ],
+            )
 
             cells = row.locator("td")
             if cells.count() < 3:
@@ -52,6 +77,8 @@ def fetch_dolar_turismo(
             sell_raw = cells.nth(2).inner_text().strip()
     except PlaywrightTimeoutError as exc:
         raise PriceParseError("timeout ao buscar Dolar Turismo") from exc
+    except PageConsistencyError as exc:
+        raise PriceParseError(str(exc)) from exc
 
     if not buy_raw or not sell_raw or not _HAS_DIGIT.search(buy_raw) or not _HAS_DIGIT.search(sell_raw):
         raise PriceParseError(

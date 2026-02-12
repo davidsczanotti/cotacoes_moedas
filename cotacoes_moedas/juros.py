@@ -9,6 +9,11 @@ import time
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .parsing import ParseDecimalError, parse_pt_br_decimal
+from .page_consistency import (
+    PageCheck,
+    PageConsistencyError,
+    ensure_page_consistency,
+)
 from .playwright_utils import chromium_page, proxy_from_env
 
 
@@ -91,9 +96,31 @@ def fetch_tjlp(
             page.goto(TJLP_URL, wait_until="domcontentloaded", timeout=timeout_ms)
             locator = page.locator("div.valor", has_text="%").first
             locator.wait_for(state="visible", timeout=timeout_ms)
+            ensure_page_consistency(
+                page,
+                source="BNDES TJLP",
+                checks=[
+                    PageCheck(
+                        "url esperada",
+                        lambda p: (
+                            "bndes.gov.br" in (p.url or "").lower(),
+                            f"url atual: {p.url}",
+                        ),
+                    ),
+                    PageCheck(
+                        "seletor de valor",
+                        lambda p: (
+                            p.locator("div.valor", has_text="%").count() > 0,
+                            "nao encontrou bloco com percentual da TJLP",
+                        ),
+                    ),
+                ],
+            )
             raw_value = locator.inner_text().strip()
     except PlaywrightTimeoutError as exc:
         raise PriceParseError("timeout ao buscar TJLP no BNDES") from exc
+    except PageConsistencyError as exc:
+        raise PriceParseError(str(exc)) from exc
 
     if not raw_value:
         raise PriceParseError("nao encontrou valor da TJLP")
@@ -122,9 +149,34 @@ def fetch_selic(
             launch_args=["--no-sandbox"],
         ) as page:
             page.goto(SELIC_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+            table = page.locator("table").first
+            table.wait_for(state="visible", timeout=timeout_ms)
+            ensure_page_consistency(
+                page,
+                source="BCB SELIC",
+                checks=[
+                    PageCheck(
+                        "url esperada",
+                        lambda p: (
+                            "bcb.gov.br/controleinflacao/historicotaxasjuros"
+                            in (p.url or "").lower(),
+                            f"url atual: {p.url}",
+                        ),
+                    ),
+                    PageCheck(
+                        "linhas da tabela",
+                        lambda p: (
+                            p.locator("table tr").count() > 1,
+                            "tabela sem linhas suficientes para historico",
+                        ),
+                    ),
+                ],
+            )
             reference_date, _, raw_value = _wait_latest_selic_row(page, timeout_ms)
     except PlaywrightTimeoutError as exc:
         raise PriceParseError("timeout ao buscar SELIC no BCB") from exc
+    except PageConsistencyError as exc:
+        raise PriceParseError(str(exc)) from exc
 
     if not raw_value or reference_date is None:
         raise PriceParseError("nao encontrou valor atual da SELIC")

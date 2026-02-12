@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 import os
 from pathlib import Path
+import shutil
 import sys
 import time
 from typing import Callable
@@ -26,6 +27,7 @@ from cotacoes_moedas.network_sync import (
     copiar_pasta_para_rede,
     parse_network_dirs,
 )
+from cotacoes_moedas.network_copy import try_to_unc
 from cotacoes_moedas.redaction import redact_secrets
 
 _USD_SPREAD = Decimal("0.0020")
@@ -309,12 +311,155 @@ def _skip_outcome(key: str, reason: str) -> FetchOutcome:
     )
 
 
+def _empty_filled_sources() -> dict[str, bool]:
+    return {key: False for key in _SOURCE_REQUIRED_COLUMNS}
+
+
+def _network_planilha_candidates(
+    network_dirs: list[str],
+    *,
+    network_dest_folder: str,
+) -> list[Path]:
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    for base_dir in network_dirs:
+        raw_base = (base_dir or "").strip()
+        if not raw_base:
+            continue
+
+        bases = [raw_base]
+        unc_base, _ = try_to_unc(raw_base)
+        if unc_base and unc_base != raw_base:
+            bases.append(unc_base)
+
+        for base in bases:
+            candidate = (
+                Path(base) / network_dest_folder / "planilhas" / "cotacoes.xlsx"
+            )
+            key = str(candidate).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
+
+    return candidates
+
+
+def _select_reference_planilha_path(
+    local_planilha_path: Path,
+    *,
+    network_dirs: list[str],
+    network_dest_folder: str,
+) -> Path | None:
+    if not network_dirs:
+        return local_planilha_path
+
+    candidates = _network_planilha_candidates(
+        network_dirs,
+        network_dest_folder=network_dest_folder,
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    if candidates:
+        return candidates[0]
+    return None
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return str(left).strip().lower() == str(right).strip().lower()
+
+
+def _sync_local_planilhas_from_reference(
+    reference_planilha_path: Path,
+    *,
+    local_planilha_path: Path,
+    local_csv_path: Path,
+) -> bool:
+    if _same_path(reference_planilha_path, local_planilha_path):
+        return True
+
+    if not reference_planilha_path.exists():
+        _log(
+            "ERRO: Planilha de referencia nao encontrada para sincronizacao local: "
+            f"{reference_planilha_path}"
+        )
+        return False
+
+    _log(
+        "Sincronizando arquivos locais a partir da planilha de referencia da rede..."
+    )
+    try:
+        local_planilha_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(reference_planilha_path, local_planilha_path)
+        reference_csv_path = reference_planilha_path.with_name("cotacoes.csv")
+        if reference_csv_path.exists():
+            shutil.copy2(reference_csv_path, local_csv_path)
+    except Exception as exc:
+        detail = redact_secrets(str(exc))
+        _log(
+            "ERRO: Falha ao sincronizar base local com a referencia da rede: "
+            f"{exc.__class__.__name__} {detail}"
+        )
+        return False
+
+    _log("Sincronizacao local concluida.")
+    return True
+
+
+def _validate_planilha_row_consistency(
+    planilha_path: Path,
+    *,
+    target_date: date,
+    outcomes: dict[str, FetchOutcome],
+) -> list[str]:
+    if not planilha_path.exists():
+        return [f"planilha nao encontrada: {planilha_path}"]
+
+    workbook = load_workbook(planilha_path, data_only=True)
+    try:
+        sheet = workbook.active
+        row = _find_row_by_date(sheet, target_date)
+        if row is None:
+            return [
+                "linha da data nao encontrada: "
+                f"{target_date.strftime('%d/%m/%Y')} em {planilha_path}"
+            ]
+
+        issues: list[str] = []
+        for key, columns in _SOURCE_REQUIRED_COLUMNS.items():
+            outcome = outcomes.get(key)
+            if outcome is None:
+                continue
+            should_be_filled = (
+                outcome.skip_reason == "ja preenchido na data de hoje"
+                or outcome.value is not None
+            )
+            if should_be_filled and not _is_source_filled(sheet, row, columns):
+                issues.append(
+                    f"{_SOURCE_LABELS[key]}: colunas esperadas "
+                    f"{'/'.join(columns)} vazias na linha {row}"
+                )
+        return issues
+    finally:
+        close = getattr(workbook, "close", None)
+        if callable(close):
+            close()
+
+
 def _select_fetches(
     now: datetime,
     planilha_path: Path,
+    *,
+    reference_planilha_path: Path | None = None,
 ) -> tuple[list[FetchSpec], dict[str, FetchOutcome]]:
     today = now.date()
-    filled = _read_filled_sources(planilha_path, today)
+    source_for_validation = reference_planilha_path or planilha_path
+    if source_for_validation.exists():
+        filled = _read_filled_sources(source_for_validation, today)
+    else:
+        filled = _empty_filled_sources()
     allow_morning_quotes = _hm(now) <= _MORNING_QUOTES_CUTOFF_HM
     allow_ptax = _hm(now) >= _PTAX_AVAILABLE_FROM_HM
 
@@ -577,10 +722,10 @@ def _copy_planilhas_to_network(
     network_dirs: list[str],
     *,
     network_dest_folder: str,
-) -> None:
+) -> Path | None:
     if not planilhas_dir.exists() or not planilhas_dir.is_dir():
         _log(f"Pasta de planilhas nao encontrada: {planilhas_dir}")
-        return
+        return None
 
     _log("Copiando pasta de planilhas para a rede...")
     destination_dir, unc_error, copy_error = copiar_pasta_para_rede(
@@ -600,7 +745,7 @@ def _copy_planilhas_to_network(
                 "Copia em rede: nenhum destino valido informado: "
                 + "; ".join(network_dirs)
             )
-        return
+        return None
 
     if unc_error:
         detail = redact_secrets(str(unc_error))
@@ -610,6 +755,7 @@ def _copy_planilhas_to_network(
         )
 
     _log(f"Pasta '{planilhas_dir.name}' copiada para: {destination_dir}")
+    return destination_dir
 
 
 def main() -> int:
@@ -664,7 +810,72 @@ def main() -> int:
             "Validando planilha para decidir quais fontes coletar "
             "(nao sobrescreve valores ja preenchidos no dia)."
         )
-        selected_specs, outcomes = _select_fetches(now, planilha_path)
+        reference_planilha_path = _select_reference_planilha_path(
+            planilha_path,
+            network_dirs=network_copy_dirs,
+            network_dest_folder=network_dest_folder,
+        )
+        if reference_planilha_path is None:
+            _log(
+                "ERRO: Nao foi possivel resolver caminho de planilha para validacao "
+                "na rede. Execucao abortada."
+            )
+            duration = _format_duration(time.monotonic() - process_start)
+            _log(f"Processo abortado em {duration} (minutos:segundos).")
+            return 1
+        elif reference_planilha_path.exists():
+            source_label = "rede" if reference_planilha_path != planilha_path else "local"
+            _log(
+                "Planilha de validacao de preenchimento "
+                f"({source_label}): {reference_planilha_path}"
+            )
+        else:
+            _log(
+                "Planilha de validacao na rede nao encontrada: "
+                f"{reference_planilha_path}. "
+                "Copiando planilhas locais para inicializar o destino."
+            )
+            bootstrapped_dir = _copy_planilhas_to_network(
+                base_dir / "planilhas",
+                network_copy_dirs,
+                network_dest_folder=network_dest_folder,
+            )
+            if not bootstrapped_dir:
+                _log("ERRO: Falha ao inicializar planilha de referencia na rede.")
+                duration = _format_duration(time.monotonic() - process_start)
+                _log(f"Processo abortado em {duration} (minutos:segundos).")
+                return 1
+
+            bootstrapped_reference = bootstrapped_dir / "cotacoes.xlsx"
+            if not bootstrapped_reference.exists():
+                _log(
+                    "ERRO: Inicializacao concluida, mas planilha de referencia "
+                    f"nao foi encontrada em {bootstrapped_reference}."
+                )
+                duration = _format_duration(time.monotonic() - process_start)
+                _log(f"Processo abortado em {duration} (minutos:segundos).")
+                return 1
+
+            reference_planilha_path = bootstrapped_reference
+            _log(
+                "Planilha de validacao de preenchimento (rede/bootstrap): "
+                f"{reference_planilha_path}"
+            )
+
+        if not _sync_local_planilhas_from_reference(
+            reference_planilha_path,
+            local_planilha_path=planilha_path,
+            local_csv_path=csv_path,
+        ):
+            duration = _format_duration(time.monotonic() - process_start)
+            _log(f"Processo abortado em {duration} (minutos:segundos).")
+            return 1
+
+        selected_specs, outcomes = _select_fetches(
+            now,
+            planilha_path,
+            reference_planilha_path=reference_planilha_path,
+        )
         _log_fetch_plan(selected_specs, outcomes)
         if not selected_specs:
             _log(
@@ -681,6 +892,18 @@ def main() -> int:
 
         _log_stage(3, total_steps, "Atualizando planilha Excel.")
         _update_planilha(planilha_path, now.date(), outcomes, errors)
+        local_validation_issues = _validate_planilha_row_consistency(
+            planilha_path,
+            target_date=now.date(),
+            outcomes=outcomes,
+        )
+        if local_validation_issues:
+            _log("ERRO: Validacao local apos atualizacao encontrou inconsistencias:")
+            for issue in local_validation_issues:
+                _log(f"- {issue}")
+            duration = _format_duration(time.monotonic() - process_start)
+            _log(f"Processo abortado em {duration} (minutos:segundos).")
+            return 1
 
         _log_stage(4, total_steps, "Atualizando CSV.")
         update_csv_from_xlsx(planilha_path, csv_path)
@@ -700,11 +923,27 @@ def main() -> int:
         if not network_copy_dirs:
             _log("Copia em rede desabilitada.")
         else:
-            _copy_planilhas_to_network(
+            destination_planilhas_dir = _copy_planilhas_to_network(
                 base_dir / "planilhas",
                 network_copy_dirs,
                 network_dest_folder=network_dest_folder,
             )
+            if destination_planilhas_dir:
+                network_validation_issues = _validate_planilha_row_consistency(
+                    destination_planilhas_dir / "cotacoes.xlsx",
+                    target_date=now.date(),
+                    outcomes=outcomes,
+                )
+                if network_validation_issues:
+                    _log(
+                        "ERRO: Validacao final na rede encontrou inconsistencias:"
+                    )
+                    for issue in network_validation_issues:
+                        _log(f"- {issue}")
+                    duration = _format_duration(time.monotonic() - process_start)
+                    _log(f"Processo abortado em {duration} (minutos:segundos).")
+                    return 1
+                _log("Validacao final na rede: OK.")
         duration = _format_duration(time.monotonic() - process_start)
         _log(f"Processo finalizado em {duration} (minutos:segundos).")
         return 0

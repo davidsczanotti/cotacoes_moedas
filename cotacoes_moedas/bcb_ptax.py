@@ -9,6 +9,12 @@ import time
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .parsing import ParseDecimalError, parse_pt_br_decimal
+from .page_consistency import (
+    PageCheck,
+    PageConsistencyError,
+    describe_page,
+    ensure_page_consistency,
+)
 from .playwright_utils import chromium_page, proxy_from_env
 
 
@@ -88,9 +94,48 @@ def _fetch_ptax(
             launch_args=["--no-sandbox"],
         ) as page:
             page.goto(BCB_HISTORICO_URL, wait_until="commit", timeout=timeout_ms)
-            frame = page.frame_locator(
+            iframe_selector = (
                 'iframe[src*="ptax.bcb.gov.br/ptax_internet/consultaBoletim.do"]'
             )
+            ensure_page_consistency(
+                page,
+                source=f"BCB PTAX {currency_label}",
+                checks=[
+                    PageCheck(
+                        "url esperada",
+                        lambda p: (
+                            "bcb.gov.br/estabilidadefinanceira/historicocotacoes"
+                            in (p.url or "").lower(),
+                            f"url atual: {p.url}",
+                        ),
+                    ),
+                    PageCheck(
+                        "iframe PTAX",
+                        lambda p: (
+                            p.locator(iframe_selector).count() > 0,
+                            f"iframe ausente: {iframe_selector}",
+                        ),
+                    ),
+                ],
+            )
+            frame = page.frame_locator(
+                iframe_selector
+            )
+            required_fields = [
+                ('input[name="RadOpcao"][value="1"]', "opcao de periodo"),
+                ('input[name="DATAINI"]', "campo DATAINI"),
+                ('input[name="DATAFIM"]', "campo DATAFIM"),
+                ('select[name="ChkMoeda"]', "combo de moeda"),
+                ('input[type="submit"]', "botao de consulta"),
+            ]
+            for selector, label in required_fields:
+                if frame.locator(selector).count() <= 0:
+                    raise PriceParseError(
+                        "estrutura da pagina possivelmente alterada em "
+                        f"BCB PTAX ({currency_label}); "
+                        f"campo ausente ({label}): {selector}; "
+                        f"{describe_page(page)}"
+                    )
             frame.locator('input[name="RadOpcao"][value="1"]').check()
             frame.locator('input[name="DATAINI"]').fill(_format_date(start))
             frame.locator('input[name="DATAFIM"]').fill(target_date)
@@ -113,6 +158,8 @@ def _fetch_ptax(
         raise PriceParseError(
             f"timeout ao buscar PTAX para {currency_label}"
         ) from exc
+    except PageConsistencyError as exc:
+        raise PriceParseError(str(exc)) from exc
 
     if not buy_raw or not sell_raw:
         raise PriceParseError(
