@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -425,3 +426,57 @@ def test_main_syncs_network_even_when_no_sources_selected(
 
     assert exit_code == 0
     assert copied["called"] is True
+
+
+def test_sync_local_planilhas_preserves_local_when_network_not_newer(
+    tmp_path: Path,
+) -> None:
+    network_planilha = tmp_path / "network" / "cotacoes.xlsx"
+    local_planilha = tmp_path / "local" / "cotacoes.xlsx"
+    local_csv = tmp_path / "local" / "cotacoes.csv"
+
+    network_planilha.parent.mkdir(parents=True, exist_ok=True)
+    local_planilha.parent.mkdir(parents=True, exist_ok=True)
+    network_planilha.write_text("rede-antiga", encoding="utf-8")
+    local_planilha.write_text("local-novo", encoding="utf-8")
+
+    os.utime(network_planilha, (1_700_000_000, 1_700_000_000))
+    os.utime(local_planilha, (1_800_000_000, 1_800_000_000))
+
+    synced = main._sync_local_planilhas_from_reference(
+        network_planilha,
+        local_planilha_path=local_planilha,
+        local_csv_path=local_csv,
+    )
+
+    assert synced is True
+    assert local_planilha.read_text(encoding="utf-8") == "local-novo"
+
+
+def test_sync_local_planilhas_copies_when_network_is_newer(
+    tmp_path: Path,
+) -> None:
+    network_planilha = tmp_path / "network" / "cotacoes.xlsx"
+    network_csv = tmp_path / "network" / "cotacoes.csv"
+    local_planilha = tmp_path / "local" / "cotacoes.xlsx"
+    local_csv = tmp_path / "local" / "cotacoes.csv"
+
+    network_planilha.parent.mkdir(parents=True, exist_ok=True)
+    local_planilha.parent.mkdir(parents=True, exist_ok=True)
+    network_planilha.write_text("rede-nova", encoding="utf-8")
+    network_csv.write_text("csv-rede", encoding="utf-8")
+    local_planilha.write_text("local-antigo", encoding="utf-8")
+    local_csv.write_text("csv-local-antigo", encoding="utf-8")
+
+    os.utime(network_planilha, (1_800_000_000, 1_800_000_000))
+    os.utime(local_planilha, (1_700_000_000, 1_700_000_000))
+
+    synced = main._sync_local_planilhas_from_reference(
+        network_planilha,
+        local_planilha_path=local_planilha,
+        local_csv_path=local_csv,
+    )
+
+    assert synced is True
+    assert local_planilha.read_text(encoding="utf-8") == "rede-nova"
+    assert local_csv.read_text(encoding="utf-8") == "csv-rede"

@@ -388,6 +388,26 @@ def _sync_local_planilhas_from_reference(
         )
         return False
 
+    if local_planilha_path.exists():
+        try:
+            reference_mtime = reference_planilha_path.stat().st_mtime
+            local_mtime = local_planilha_path.stat().st_mtime
+        except OSError as exc:
+            detail = redact_secrets(str(exc))
+            _log(
+                "Aviso: Nao foi possivel comparar datas de modificacao entre "
+                "planilha local e referencia da rede: "
+                f"{exc.__class__.__name__} {detail}. "
+                "Mantendo base local."
+            )
+            return True
+        if reference_mtime <= local_mtime:
+            _log(
+                "Sincronizacao local: referencia da rede nao e mais nova que o "
+                "arquivo local. Mantendo base local para evitar sobrescrita."
+            )
+            return True
+
     _log(
         "Sincronizando arquivos locais a partir da planilha de referencia da rede..."
     )

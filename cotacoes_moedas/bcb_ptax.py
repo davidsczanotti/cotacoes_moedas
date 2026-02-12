@@ -73,6 +73,49 @@ def _load_ptax_rows(frame, timeout_ms: int) -> list[tuple[date, str, str, str]]:
     raise PriceParseError("timeout ao carregar tabela PTAX")
 
 
+def _find_ptax_frame(page):
+    required_fields = ('input[name="DATAINI"]', 'select[name="ChkMoeda"]')
+    for frame in page.frames:
+        frame_url = (frame.url or "").lower()
+        if "ptax_internet" in frame_url or "consultaboletim.do" in frame_url:
+            return frame
+
+    for frame in page.frames:
+        try:
+            if all(frame.locator(selector).count() > 0 for selector in required_fields):
+                return frame
+        except Exception:
+            continue
+    return None
+
+
+def _load_ptax_frame(page, timeout_ms: int):
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    while time.monotonic() < deadline:
+        frame = _find_ptax_frame(page)
+        if frame is not None:
+            return frame
+        time.sleep(0.5)
+
+    iframe_sources: list[str] = []
+    try:
+        raw_sources = page.eval_on_selector_all(
+            "iframe",
+            "els => els.map(el => (el.getAttribute('src') || '').trim())",
+        )
+        for source in raw_sources:
+            if source:
+                iframe_sources.append(str(source))
+    except Exception:
+        iframe_sources = []
+
+    iframe_detail = ", ".join(iframe_sources) if iframe_sources else "nenhum"
+    raise PriceParseError(
+        "iframe PTAX nao encontrado/carregado; "
+        f"iframes detectados: {iframe_detail}; {describe_page(page)}"
+    )
+
+
 def _fetch_ptax(
     currency_label: str,
     symbol: str,
@@ -93,9 +136,10 @@ def _fetch_ptax(
             proxy=proxy,
             launch_args=["--no-sandbox"],
         ) as page:
-            page.goto(BCB_HISTORICO_URL, wait_until="commit", timeout=timeout_ms)
-            iframe_selector = (
-                'iframe[src*="ptax.bcb.gov.br/ptax_internet/consultaBoletim.do"]'
+            page.goto(
+                BCB_HISTORICO_URL,
+                wait_until="domcontentloaded",
+                timeout=timeout_ms,
             )
             ensure_page_consistency(
                 page,
@@ -109,18 +153,9 @@ def _fetch_ptax(
                             f"url atual: {p.url}",
                         ),
                     ),
-                    PageCheck(
-                        "iframe PTAX",
-                        lambda p: (
-                            p.locator(iframe_selector).count() > 0,
-                            f"iframe ausente: {iframe_selector}",
-                        ),
-                    ),
                 ],
             )
-            frame = page.frame_locator(
-                iframe_selector
-            )
+            frame = _load_ptax_frame(page, timeout_ms)
             required_fields = [
                 ('input[name="RadOpcao"][value="1"]', "opcao de periodo"),
                 ('input[name="DATAINI"]', "campo DATAINI"),
