@@ -189,6 +189,42 @@ def test_main_bootstraps_network_reference_planilha_when_missing(
     monkeypatch.setattr(main, "parse_network_dirs", lambda *_: [str(network_base)])
     monkeypatch.setattr(main, "_now_local", lambda: now)
     monkeypatch.setattr(main, "_select_fetches", fake_select_fetches)
+    monkeypatch.setattr(main, "normalize_xlsx_layout", lambda *_: None)
+    monkeypatch.setattr(main, "_log", lambda *_: None)
+
+    exit_code = main.main()
+
+    expected_reference = network_base / "cotacoes" / "planilhas" / "cotacoes.xlsx"
+    assert exit_code == 0
+    assert expected_reference.exists()
+    assert captured["reference"] == expected_reference
+
+
+def test_main_bootstraps_network_reference_when_missing_between_windows(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path
+    network_base = tmp_path / "network_root"
+    now = datetime(2026, 2, 4, 9, 37, 0, tzinfo=main._LOCAL_TZ)
+
+    local_planilhas = base_dir / "planilhas"
+    local_planilhas.mkdir(parents=True, exist_ok=True)
+    (local_planilhas / "cotacoes.xlsx").write_text("", encoding="utf-8")
+    (local_planilhas / "cotacoes.csv").write_text("", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    def fake_select_fetches(*_args, **_kwargs):
+        captured["reference"] = _kwargs.get("reference_planilha_path")
+        return [], {}
+
+    monkeypatch.setattr(main, "_resolve_base_dir", lambda: base_dir)
+    monkeypatch.setattr(main, "_configure_playwright", lambda *_: None)
+    monkeypatch.setattr(main, "parse_network_dirs", lambda *_: [str(network_base)])
+    monkeypatch.setattr(main, "_now_local", lambda: now)
+    monkeypatch.setattr(main, "_select_fetches", fake_select_fetches)
+    monkeypatch.setattr(main, "normalize_xlsx_layout", lambda *_: None)
     monkeypatch.setattr(main, "_log", lambda *_: None)
 
     exit_code = main.main()
@@ -211,6 +247,7 @@ def test_main_aborts_when_network_reference_planilha_missing_and_bootstrap_fails
     monkeypatch.setattr(main, "_configure_playwright", lambda *_: None)
     monkeypatch.setattr(main, "parse_network_dirs", lambda *_: [str(network_base)])
     monkeypatch.setattr(main, "_now_local", lambda: now)
+    monkeypatch.setattr(main, "normalize_xlsx_layout", lambda *_: None)
     monkeypatch.setattr(main, "_log", lambda *_: None)
 
     exit_code = main.main()
@@ -297,3 +334,94 @@ def test_validate_planilha_row_consistency_detects_missing_expected_fields(
     )
 
     assert any("USD/BRL (Investing)" in issue for issue in issues)
+
+
+def test_main_aborts_when_bootstrap_layout_formatting_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path
+    network_base = tmp_path / "network_root"
+    now = datetime(2026, 2, 4, 9, 37, 0, tzinfo=main._LOCAL_TZ)
+
+    local_planilhas = base_dir / "planilhas"
+    local_planilhas.mkdir(parents=True, exist_ok=True)
+    (local_planilhas / "cotacoes.xlsx").write_text("", encoding="utf-8")
+    (local_planilhas / "cotacoes.csv").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(main, "_resolve_base_dir", lambda: base_dir)
+    monkeypatch.setattr(main, "_configure_playwright", lambda *_: None)
+    monkeypatch.setattr(main, "parse_network_dirs", lambda *_: [str(network_base)])
+    monkeypatch.setattr(main, "_now_local", lambda: now)
+    monkeypatch.setattr(
+        main,
+        "normalize_xlsx_layout",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("falha fake")),
+    )
+    monkeypatch.setattr(main, "_log", lambda *_: None)
+
+    exit_code = main.main()
+
+    assert exit_code == 1
+
+
+def test_main_syncs_network_even_when_no_sources_selected(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path
+    now = datetime(2026, 2, 4, 9, 37, 0, tzinfo=main._LOCAL_TZ)
+    network_base = tmp_path / "network_root"
+
+    local_planilhas = base_dir / "planilhas"
+    local_planilhas.mkdir(parents=True, exist_ok=True)
+    local_planilha_path = local_planilhas / "cotacoes.xlsx"
+
+    workbook = Workbook()
+    workbook.save(local_planilha_path)
+    workbook.close()
+    (local_planilhas / "cotacoes.csv").write_text("", encoding="utf-8")
+
+    copied: dict[str, object] = {}
+
+    def fake_copy(*_args, **_kwargs):
+        copied["called"] = True
+        destination = network_base / "cotacoes" / "planilhas"
+        destination.mkdir(parents=True, exist_ok=True)
+        return destination
+
+    outcomes = {
+        key: main.FetchOutcome(
+            label=main._SOURCE_LABELS[key],
+            value=None,
+            error=None,
+            elapsed_s=0.0,
+            skipped=True,
+            skip_reason="fora do horario (teste)",
+        )
+        for key in main._SOURCE_REQUIRED_COLUMNS
+    }
+
+    monkeypatch.setattr(main, "_resolve_base_dir", lambda: base_dir)
+    monkeypatch.setattr(main, "_configure_playwright", lambda *_: None)
+    monkeypatch.setattr(main, "parse_network_dirs", lambda *_: [str(network_base)])
+    monkeypatch.setattr(main, "_now_local", lambda: now)
+    monkeypatch.setattr(main, "normalize_xlsx_layout", lambda *_: None)
+    monkeypatch.setattr(
+        main,
+        "_select_reference_planilha_path",
+        lambda *_args, **_kwargs: local_planilha_path,
+    )
+    monkeypatch.setattr(
+        main,
+        "_sync_local_planilhas_from_reference",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(main, "_select_fetches", lambda *_args, **_kwargs: ([], outcomes))
+    monkeypatch.setattr(main, "_copy_planilhas_to_network", fake_copy)
+    monkeypatch.setattr(main, "_log", lambda *_: None)
+
+    exit_code = main.main()
+
+    assert exit_code == 0
+    assert copied["called"] is True

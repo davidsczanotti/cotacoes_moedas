@@ -8,6 +8,7 @@ import re
 from typing import Callable
 
 from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from .bcb_ptax import PtaxQuote
 from .investing import Quote
@@ -23,6 +24,8 @@ _TJLP_COLUMN = "L"
 _SELIC_COLUMN = "M"
 _CDI_COLUMN = "N"
 _LOG_COLUMN = "O"
+_FIRST_COLUMN = "A"
+_LAST_COLUMN_INDEX = 15
 _DEFAULT_CSV_HEADER = [
     "Data",
     "Dolar Oficial Compra",
@@ -40,6 +43,39 @@ _DEFAULT_CSV_HEADER = [
     "CDI",
     "Situacao",
 ]
+_COLUMN_WIDTHS = {
+    "A": 10.5,
+    "B": 12.5,
+    "C": 11.5,
+    "D": 12.5,
+    "E": 11.5,
+    "F": 12.5,
+    "G": 11.5,
+    "H": 11.5,
+    "I": 11.5,
+    "J": 11.5,
+    "K": 11.5,
+    "L": 10.0,
+    "M": 10.0,
+    "N": 12.5,
+    "O": 30.0,
+}
+_HEADER_TOP_FILL = PatternFill(fill_type="solid", fgColor="DCE6F1")
+_HEADER_FILL = PatternFill(fill_type="solid", fgColor="D9E1F2")
+_ROW_ODD_FILL = PatternFill(fill_type="solid", fgColor="FFFFFF")
+_ROW_EVEN_FILL = PatternFill(fill_type="solid", fgColor="ECF3FB")
+_BORDER_SIDE = Side(style="thin", color="9CB6D9")
+_CELL_BORDER = Border(
+    left=_BORDER_SIDE,
+    right=_BORDER_SIDE,
+    top=_BORDER_SIDE,
+    bottom=_BORDER_SIDE,
+)
+_HEADER_FONT = Font(name="Calibri", size=11, bold=True, color="1F2937")
+_BODY_FONT = Font(name="Calibri", size=11, bold=False, color="000000")
+_ALIGN_CENTER = Alignment(horizontal="center", vertical="center")
+_ALIGN_RIGHT = Alignment(horizontal="right", vertical="center")
+_ALIGN_LEFT = Alignment(horizontal="left", vertical="center")
 
 
 def _quantize_4(value: Decimal) -> Decimal:
@@ -83,11 +119,16 @@ def _looks_like_log(value: object) -> bool:
 
 
 def _ensure_layout(sheet) -> None:
-    # Mantem compatibilidade com planilhas antigas (log na coluna L).
-    sheet["L1"] = "TJLP"
-    sheet["M1"] = "SELIC"
-    sheet["N1"] = "CDI"
-    sheet["O1"] = "Situacao"
+    # Mantem compatibilidade com planilhas antigas (log na coluna L)
+    # e garante os cabecalhos finais na linha 2.
+    sheet["L1"] = None
+    sheet["M1"] = None
+    sheet["N1"] = None
+    sheet["O1"] = None
+    sheet["L2"] = "TJLP"
+    sheet["M2"] = "SELIC"
+    sheet["N2"] = "CDI"
+    sheet["O2"] = "Situação"
 
     for row in range(3, sheet.max_row + 1):
         old_log = sheet.cell(row=row, column=12).value
@@ -97,6 +138,53 @@ def _ensure_layout(sheet) -> None:
         if _is_blank(new_log):
             sheet.cell(row=row, column=_LOG_COLUMN_INDEX).value = str(old_log).strip()
         sheet.cell(row=row, column=12).value = None
+
+
+def _apply_visual_style(sheet) -> None:
+    last_data_row = _find_last_date_row(sheet) or 2
+    last_row = max(2, last_data_row)
+
+    # Garantir os agrupamentos visuais da linha 1.
+    for merged in list(sheet.merged_cells.ranges):
+        if merged.min_row == 1 and merged.max_row == 1:
+            sheet.unmerge_cells(str(merged))
+    for merge_ref in ("B1:C1", "D1:E1", "F1:G1", "H1:I1", "J1:K1"):
+        sheet.merge_cells(merge_ref)
+
+    for col_name, width in _COLUMN_WIDTHS.items():
+        sheet.column_dimensions[col_name].width = width
+
+    sheet.row_dimensions[1].height = 22
+    sheet.row_dimensions[2].height = 20
+    sheet.freeze_panes = "A3"
+    sheet.auto_filter.ref = f"{_FIRST_COLUMN}2:{_LOG_COLUMN}{last_row}"
+
+    for col_index in range(1, _LAST_COLUMN_INDEX + 1):
+        top_cell = sheet.cell(row=1, column=col_index)
+        top_cell.fill = _HEADER_TOP_FILL
+        top_cell.font = _HEADER_FONT
+        top_cell.alignment = _ALIGN_CENTER
+        top_cell.border = _CELL_BORDER
+
+        header_cell = sheet.cell(row=2, column=col_index)
+        header_cell.fill = _HEADER_FILL
+        header_cell.font = _HEADER_FONT
+        header_cell.alignment = _ALIGN_CENTER
+        header_cell.border = _CELL_BORDER
+
+    for row in range(3, last_row + 1):
+        row_fill = _ROW_EVEN_FILL if row % 2 == 0 else _ROW_ODD_FILL
+        for col_index in range(1, _LAST_COLUMN_INDEX + 1):
+            cell = sheet.cell(row=row, column=col_index)
+            cell.fill = row_fill
+            cell.font = _BODY_FONT
+            cell.border = _CELL_BORDER
+            if col_index == 1:
+                cell.alignment = _ALIGN_CENTER
+            elif col_index == _LOG_COLUMN_INDEX:
+                cell.alignment = _ALIGN_LEFT
+            else:
+                cell.alignment = _ALIGN_RIGHT
 
 
 def _find_previous_non_blank_value(
@@ -143,6 +231,7 @@ def _load_and_save_workbook(
         sheet = workbook.active
         _ensure_layout(sheet)
         result = apply_updates(sheet)
+        _apply_visual_style(sheet)
         workbook.save(path)
         return result
     finally:
@@ -740,6 +829,17 @@ def update_xlsx_quotes_and_log(
         return written
 
     return _load_and_save_workbook(target, _apply)
+
+
+def normalize_xlsx_layout(path: str | Path) -> None:
+    target = Path(path)
+    if not target.exists():
+        raise FileNotFoundError(target)
+
+    def _apply(_sheet) -> None:
+        return None
+
+    _load_and_save_workbook(target, _apply)
 
 
 def update_csv_from_xlsx(

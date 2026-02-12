@@ -20,6 +20,7 @@ from cotacoes_moedas import (
     fetch_selic,
     fetch_tjlp,
     fetch_usd_brl,
+    normalize_xlsx_layout,
     update_csv_from_xlsx,
     update_xlsx_quotes_and_log,
 )
@@ -801,11 +802,9 @@ def main() -> int:
         if now_hm > _MORNING_QUOTES_CUTOFF_HM and now_hm < _PTAX_AVAILABLE_FROM_HM:
             _log(
                 "Fora da janela de coleta no momento "
-                "(apos 08:30 e antes de 13:10). Encerrando sem alteracoes."
+                "(apos 08:30 e antes de 13:10). "
+                "Sem coleta agora, mas validacao/bootstrap de rede continua."
             )
-            duration = _format_duration(time.monotonic() - process_start)
-            _log(f"Processo finalizado em {duration} (minutos:segundos).")
-            return 0
         _log(
             "Validando planilha para decidir quais fontes coletar "
             "(nao sobrescreve valores ja preenchidos no dia)."
@@ -835,6 +834,14 @@ def main() -> int:
                 f"{reference_planilha_path}. "
                 "Copiando planilhas locais para inicializar o destino."
             )
+            try:
+                normalize_xlsx_layout(planilha_path)
+            except Exception as exc:
+                detail = _error_detail("Formatacao local", exc)
+                _log(f"ERRO ao preparar planilha local para bootstrap: {detail}")
+                duration = _format_duration(time.monotonic() - process_start)
+                _log(f"Processo abortado em {duration} (minutos:segundos).")
+                return 1
             bootstrapped_dir = _copy_planilhas_to_network(
                 base_dir / "planilhas",
                 network_copy_dirs,
@@ -880,8 +887,41 @@ def main() -> int:
         if not selected_specs:
             _log(
                 "Nenhuma fonte elegivel para atualizar agora "
-                "(fora da janela de horario ou ja preenchida). Encerrando sem alteracoes."
+                "(fora da janela de horario ou ja preenchida). "
+                "Aplicando apenas normalizacao e sincronizacao final."
             )
+
+            _log_stage(3, total_steps, "Normalizando layout da planilha Excel.")
+            try:
+                normalize_xlsx_layout(planilha_path)
+            except Exception as exc:
+                detail = _error_detail("Formatacao local", exc)
+                _log(f"ERRO ao normalizar planilha local: {detail}")
+                duration = _format_duration(time.monotonic() - process_start)
+                _log(f"Processo abortado em {duration} (minutos:segundos).")
+                return 1
+
+            _log_stage(4, total_steps, "CSV mantido (sem novas cotacoes).")
+            _log("CSV nao atualizado porque nao houve coleta de novas fontes.")
+
+            _log_stage(5, total_steps, "Resumo das cotacoes coletadas.")
+            _log("Coleta nao executada nesta janela.")
+
+            _log_stage(
+                6,
+                total_steps,
+                f"Validando pasta '{network_dest_folder}' na rede e copiando planilhas.",
+            )
+            if not network_copy_dirs:
+                _log("Copia em rede desabilitada.")
+            else:
+                destination_planilhas_dir = _copy_planilhas_to_network(
+                    base_dir / "planilhas",
+                    network_copy_dirs,
+                    network_dest_folder=network_dest_folder,
+                )
+                if destination_planilhas_dir:
+                    _log("Sincronizacao final na rede concluida.")
             duration = _format_duration(time.monotonic() - process_start)
             _log(f"Processo finalizado em {duration} (minutos:segundos).")
             return 0

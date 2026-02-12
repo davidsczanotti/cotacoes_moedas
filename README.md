@@ -47,6 +47,7 @@ Observacoes importantes (para uso no cliente):
 - A validacao de "ja preenchido no dia" usa a planilha na rede; se ela nao for encontrada no destino configurado, o robo copia `planilhas/` local para a rede e continua a execucao (se a copia falhar, a execucao e abortada).
 - Antes de extrair os valores, o robo valida a consistencia estrutural de cada pagina (URL/seletores-base); se o layout mudar, registra erro detalhado para facilitar rastreio da alteracao.
 - Ao final, o robo valida a consistencia da linha da data (local e rede); se detectar regressao de preenchimento, aborta com erro.
+- O XLSX recebe formatacao visual padronizada (cabecalhos, linhas alternadas e bordas) e filtro automatico na linha 2 (`A2:O...`).
 
 ## Regras de horario (janelas)
 
@@ -61,7 +62,7 @@ Para economizar processamento e evitar sobrescrever cotacoes do dia, o robo apli
 Cenarios:
 
 - **07:00**: busca apenas USD/BRL (Investing) e Dolar Turismo (Valor); nao aciona PTAX.
-- **08:31**: nao busca nenhuma fonte e nao altera nenhum valor.
+- **08:31**: nao busca nenhuma fonte; ainda pode validar/inicializar a planilha de referencia na rede, se necessario.
 - **13:10**: busca apenas PTAX (USD/EUR/CHF); nao aciona Investing/Valor.
 
 ## Regras do historico

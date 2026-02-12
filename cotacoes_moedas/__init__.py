@@ -7,6 +7,7 @@ from .juros import (
     fetch_tjlp,
 )
 from .storage import (
+    normalize_xlsx_layout,
     update_csv_from_xlsx,
     update_xlsx_chf_ptax,
     update_xlsx_dolar_ptax,
@@ -39,4 +40,5 @@ __all__ = [
     "update_xlsx_usd_brl",
     "update_xlsx_quotes_and_log",
     "update_csv_from_xlsx",
+    "normalize_xlsx_layout",
 ]

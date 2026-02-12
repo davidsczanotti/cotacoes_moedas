@@ -186,6 +186,22 @@ def test_update_xlsx_quotes_and_log_fills_only_blanks(tmp_path: Path) -> None:
     assert Decimal(str(sheet["M3"].value)).quantize(Decimal("0.0001")) == Decimal("0.1500")
     assert Decimal(str(sheet["N3"].value)).quantize(Decimal("0.0000000001")) == Decimal("0.0551310642")
     assert sheet["O3"].value == "OK 23/01/2026 09:15:00"
+    assert sheet["L1"].value is None
+    assert sheet["M1"].value is None
+    assert sheet["N1"].value is None
+    assert sheet["O1"].value is None
+    assert sheet["L2"].value == "TJLP"
+    assert sheet["M2"].value == "SELIC"
+    assert sheet["N2"].value == "CDI"
+    assert sheet["O2"].value == "Situação"
+    merged = {str(ref) for ref in sheet.merged_cells.ranges}
+    assert "B1:C1" in merged
+    assert "D1:E1" in merged
+    assert "F1:G1" in merged
+    assert "H1:I1" in merged
+    assert "J1:K1" in merged
+    assert sheet.auto_filter.ref == "A2:O3"
+    assert sheet.freeze_panes == "A3"
     _close_workbook(workbook)
 
 
