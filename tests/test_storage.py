@@ -289,3 +289,56 @@ def test_update_xlsx_quotes_and_log_repeats_last_interest_values(tmp_path: Path)
     assert Decimal(str(sheet["M4"].value)).quantize(Decimal("0.0001")) == Decimal("0.1500")
     assert Decimal(str(sheet["N4"].value)).quantize(Decimal("0.0000000001")) == Decimal("0.0551310642")
     _close_workbook(workbook)
+
+
+def test_update_xlsx_quotes_and_log_uses_expected_interest_formats(
+    tmp_path: Path,
+) -> None:
+    xlsx_path = tmp_path / "cotacoes.xlsx"
+    _make_workbook(xlsx_path)
+
+    target_date = date(2026, 2, 13)
+
+    update_xlsx_quotes_and_log(
+        xlsx_path,
+        target_date=target_date,
+        tjlp=Decimal("9.19"),
+        selic=Decimal("15.00"),
+        cdi=Decimal("0.0551310642"),
+        logged_at=datetime(2026, 2, 13, 7, 27, 55),
+    )
+
+    workbook = load_workbook(xlsx_path)
+    sheet = workbook.active
+    assert sheet["L3"].number_format == "0.00%"
+    assert sheet["M3"].number_format == "0.00%"
+    assert sheet["N3"].number_format == "0.0000000000"
+    _close_workbook(workbook)
+
+
+def test_update_xlsx_log_normalizes_legacy_interest_formats(tmp_path: Path) -> None:
+    xlsx_path = tmp_path / "cotacoes.xlsx"
+    _make_workbook(xlsx_path)
+
+    workbook = load_workbook(xlsx_path)
+    sheet = workbook.active
+    sheet["A3"] = date(2026, 2, 12)
+    sheet["A3"].number_format = "mm-dd-yy"
+    sheet["L3"] = Decimal("0.0919")
+    sheet["L3"].number_format = "0.0000%"
+    sheet["M3"] = Decimal("0.1500")
+    sheet["M3"].number_format = "0.0000%"
+    sheet["N3"] = Decimal("0.0551310642")
+    sheet["N3"].number_format = "General"
+    workbook.save(xlsx_path)
+    _close_workbook(workbook)
+
+    update_xlsx_log(xlsx_path, target_date=date(2026, 2, 12))
+
+    workbook = load_workbook(xlsx_path)
+    sheet = workbook.active
+    assert sheet["A3"].number_format == "dd/mm/yyyy"
+    assert sheet["L3"].number_format == "0.00%"
+    assert sheet["M3"].number_format == "0.00%"
+    assert sheet["N3"].number_format == "0.0000000000"
+    _close_workbook(workbook)

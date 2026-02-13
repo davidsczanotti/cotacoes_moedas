@@ -17,6 +17,10 @@ from .valor_globo import BidAskQuote
 
 _DECIMAL_4 = Decimal("0.0001")
 _DECIMAL_10 = Decimal("0.0000000001")
+_DATE_NUMBER_FORMAT = "dd/mm/yyyy"
+_QUOTE_NUMBER_FORMAT = "0.0000"
+_PERCENT_NUMBER_FORMAT = "0.00%"
+_CDI_NUMBER_FORMAT = "0.0000000000"
 _DATE_PATTERN = re.compile(r"^\d{2}/\d{2}/\d{4}$")
 _LOCAL_TZ = datetime.now().astimezone().tzinfo or timezone.utc
 _LOG_COLUMN_INDEX = 15
@@ -106,7 +110,7 @@ def _set_cell(
     if not overwrite and not _is_blank(cell.value):
         return False
     cell.value = value
-    if number_format:
+    if number_format and cell.number_format != number_format:
         cell.number_format = number_format
     return True
 
@@ -231,6 +235,7 @@ def _load_and_save_workbook(
         sheet = workbook.active
         _ensure_layout(sheet)
         result = apply_updates(sheet)
+        _normalize_interest_number_formats(sheet)
         _apply_visual_style(sheet)
         workbook.save(path)
         return result
@@ -293,8 +298,37 @@ def _find_or_create_row_by_date(sheet, target_date: date) -> int:
     last_date_row = _find_last_date_row(sheet)
     row = (last_date_row or 2) + 1
     sheet[f"A{row}"] = target_date
-    sheet[f"A{row}"].number_format = "dd/mm/yyyy"
+    sheet[f"A{row}"].number_format = _DATE_NUMBER_FORMAT
     return row
+
+
+def _normalize_interest_number_formats(sheet) -> None:
+    last_row = _find_last_date_row(sheet)
+    if last_row is None:
+        return
+
+    for row in range(3, last_row + 1):
+        if not _coerce_date(sheet.cell(row=row, column=1).value):
+            continue
+
+        date_cell = sheet.cell(row=row, column=1)
+        if date_cell.number_format != _DATE_NUMBER_FORMAT:
+            date_cell.number_format = _DATE_NUMBER_FORMAT
+
+        tjlp_cell = sheet.cell(row=row, column=12)
+        if not _is_blank(tjlp_cell.value) and tjlp_cell.number_format != _PERCENT_NUMBER_FORMAT:
+            tjlp_cell.number_format = _PERCENT_NUMBER_FORMAT
+
+        selic_cell = sheet.cell(row=row, column=13)
+        if (
+            not _is_blank(selic_cell.value)
+            and selic_cell.number_format != _PERCENT_NUMBER_FORMAT
+        ):
+            selic_cell.number_format = _PERCENT_NUMBER_FORMAT
+
+        cdi_cell = sheet.cell(row=row, column=14)
+        if not _is_blank(cdi_cell.value) and cdi_cell.number_format != _CDI_NUMBER_FORMAT:
+            cdi_cell.number_format = _CDI_NUMBER_FORMAT
 
 
 def _find_last_updated_row(sheet) -> int:
@@ -393,7 +427,7 @@ def update_xlsx_usd_brl(
             sheet,
             f"A{row}",
             collected_date,
-            number_format="dd/mm/yyyy",
+            number_format=_DATE_NUMBER_FORMAT,
             overwrite=True,
         )
         buy_address = f"B{row}"
@@ -402,7 +436,7 @@ def update_xlsx_usd_brl(
             sheet,
             buy_address,
             compra,
-            number_format="0.0000",
+            number_format=_QUOTE_NUMBER_FORMAT,
             overwrite=overwrite,
         )
         buy_for_sale = compra
@@ -419,7 +453,7 @@ def update_xlsx_usd_brl(
             sheet,
             f"C{row}",
             venda,
-            number_format="0.0000",
+            number_format=_QUOTE_NUMBER_FORMAT,
             overwrite=overwrite,
         )
 
@@ -448,14 +482,14 @@ def update_xlsx_dolar_turismo(
             sheet,
             f"F{row}",
             compra,
-            number_format="0.0000",
+            number_format=_QUOTE_NUMBER_FORMAT,
             overwrite=overwrite,
         )
         _set_cell(
             sheet,
             f"G{row}",
             venda,
-            number_format="0.0000",
+            number_format=_QUOTE_NUMBER_FORMAT,
             overwrite=overwrite,
         )
 
@@ -484,14 +518,14 @@ def update_xlsx_dolar_ptax(
             sheet,
             f"D{row}",
             compra,
-            number_format="0.0000",
+            number_format=_QUOTE_NUMBER_FORMAT,
             overwrite=overwrite,
         )
         _set_cell(
             sheet,
             f"E{row}",
             venda,
-            number_format="0.0000",
+            number_format=_QUOTE_NUMBER_FORMAT,
             overwrite=overwrite,
         )
 
@@ -520,14 +554,14 @@ def update_xlsx_euro_ptax(
             sheet,
             f"H{row}",
             compra,
-            number_format="0.0000",
+            number_format=_QUOTE_NUMBER_FORMAT,
             overwrite=overwrite,
         )
         _set_cell(
             sheet,
             f"I{row}",
             venda,
-            number_format="0.0000",
+            number_format=_QUOTE_NUMBER_FORMAT,
             overwrite=overwrite,
         )
 
@@ -556,14 +590,14 @@ def update_xlsx_chf_ptax(
             sheet,
             f"J{row}",
             compra,
-            number_format="0.0000",
+            number_format=_QUOTE_NUMBER_FORMAT,
             overwrite=overwrite,
         )
         _set_cell(
             sheet,
             f"K{row}",
             venda,
-            number_format="0.0000",
+            number_format=_QUOTE_NUMBER_FORMAT,
             overwrite=overwrite,
         )
 
@@ -632,7 +666,7 @@ def update_xlsx_quotes_and_log(
             sheet,
             f"A{row}",
             target_date,
-            number_format="dd/mm/yyyy",
+            number_format=_DATE_NUMBER_FORMAT,
             overwrite=True,
         )
 
@@ -652,7 +686,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 buy_address,
                 compra,
-                number_format="0.0000",
+                number_format=_QUOTE_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             )
             if wrote_buy:
@@ -672,7 +706,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"C{row}",
                 venda,
-                number_format="0.0000",
+                number_format=_QUOTE_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("usd_brl", "venda")
@@ -684,7 +718,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"D{row}",
                 compra,
-                number_format="0.0000",
+                number_format=_QUOTE_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("ptax_usd", "compra")
@@ -692,7 +726,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"E{row}",
                 venda,
-                number_format="0.0000",
+                number_format=_QUOTE_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("ptax_usd", "venda")
@@ -704,7 +738,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"F{row}",
                 compra,
-                number_format="0.0000",
+                number_format=_QUOTE_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("turismo", "compra")
@@ -712,7 +746,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"G{row}",
                 venda,
-                number_format="0.0000",
+                number_format=_QUOTE_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("turismo", "venda")
@@ -724,7 +758,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"H{row}",
                 compra,
-                number_format="0.0000",
+                number_format=_QUOTE_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("ptax_eur", "compra")
@@ -732,7 +766,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"I{row}",
                 venda,
-                number_format="0.0000",
+                number_format=_QUOTE_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("ptax_eur", "venda")
@@ -744,7 +778,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"J{row}",
                 compra,
-                number_format="0.0000",
+                number_format=_QUOTE_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("ptax_chf", "compra")
@@ -752,7 +786,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"K{row}",
                 venda,
-                number_format="0.0000",
+                number_format=_QUOTE_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("ptax_chf", "venda")
@@ -764,7 +798,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"{_TJLP_COLUMN}{row}",
                 tjlp_fraction,
-                number_format="0.0000%",
+                number_format=_PERCENT_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("tjlp", "valor")
@@ -776,7 +810,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"{_SELIC_COLUMN}{row}",
                 selic_fraction,
-                number_format="0.0000%",
+                number_format=_PERCENT_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("selic", "selic")
@@ -788,7 +822,7 @@ def update_xlsx_quotes_and_log(
                 sheet,
                 f"{_CDI_COLUMN}{row}",
                 cdi_value,
-                number_format="0.0000000000",
+                number_format=_CDI_NUMBER_FORMAT,
                 overwrite=overwrite_quotes,
             ):
                 _append_written("selic", "cdi")
@@ -798,21 +832,21 @@ def update_xlsx_quotes_and_log(
             sheet,
             row,
             12,
-            number_format="0.0000%",
+            number_format=_PERCENT_NUMBER_FORMAT,
         ):
             _append_written("tjlp", "valor_repetido")
         if _repeat_previous_value_if_blank(
             sheet,
             row,
             13,
-            number_format="0.0000%",
+            number_format=_PERCENT_NUMBER_FORMAT,
         ):
             _append_written("selic", "selic_repetido")
         if _repeat_previous_value_if_blank(
             sheet,
             row,
             14,
-            number_format="0.0000000000",
+            number_format=_CDI_NUMBER_FORMAT,
         ):
             _append_written("selic", "cdi_repetido")
 
